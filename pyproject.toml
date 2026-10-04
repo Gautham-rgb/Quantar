@@ -11,7 +11,8 @@
     "qbraid",
     "qiskit-aer",
     "openqasm3",
-    "numpy"
+    "numpy", 
+    "numba"
 ]
 
  [tool.hatch.version]

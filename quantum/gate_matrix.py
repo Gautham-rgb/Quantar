@@ -28,3 +28,18 @@ def rz_MAT(angle: float) -> np.ndarray:
     c_minus = np.cos(angle / 2) - 1j * np.sin(angle / 2)
     c_plus  = np.cos(angle / 2) + 1j * np.sin(angle / 2)
     return np.array([[c_minus, 0.0], [0.0, c_plus]], dtype=complex)
+
+swap_MAT = np.array([[1, 0, 0, 0],
+                      [0, 0, 1, 0],
+                      [0, 1, 0, 0],
+                      [0, 0, 0, 1]], dtype=complex)
+
+iswap_MAT = np.array([[1, 0,  0, 0],
+                      [0, 0, 1j, 0],
+                      [0, 1j,  0, 0],
+                      [0, 0,  0, 1]], dtype=complex)
+
+swap_sqrt_MAT = np.array([[1, 0, 0, 0],
+                          [0, 0.5 + 0.5j, 0.5 - 0.5j, 0],
+                          [0, 0.5 - 0.5j, 0.5 + 0.5j, 0],
+                          [0, 0, 0, 1]], dtype=complex)
