@@ -2,8 +2,13 @@
 
 Design notes
 ------------
-* Every gate is applied by building its full matrix and multiplying the state
-  vector: `state = full_matrix @ state`. Nothing is mutated in place.
+* One or two qubit gates go through a numba kernel that reads each amplitude
+  once and writes it once; bigger gates fall back to `embedded_gate`, which
+  builds the full 2**n operator. Nothing is ever mutated in place.
+* A run of diagonal gates (the controlled phases of a QFT) is applied in one
+  fused pass over the amplitudes, and a run of SWAPs (a bit-reversal layer)
+  in a single permutation pass, instead of one pass per gate.
+* A whole circuit can be used as a single gate: see `CircuitGate`.
 * `Qubit` objects are *handles*, not containers. A qubit owns no amplitudes, so
   passing one around (or storing it in a list) never copies quantum data.
 * `op_hist` records every gate that is applied, which is what both `uncompute`
@@ -16,7 +21,19 @@ from typing import overload
 import numpy as np
 import numpy.random as rnd
 
+try:
+    from numba import njit, prange
+    HAVE_NUMBA = True
+except Exception:
+    HAVE_NUMBA = False
+    def njit(*args, **kwargs):
+        def deco(f):
+            return f
+        return deco
+    prange = range
+
 from quantum.qasm import to_openqasm3
+import quantum.gate_matrix as gm
 
 
 class Gate:
@@ -53,6 +70,44 @@ class Gate:
             not self.inverted,
         )
 
+    def remap(self, mapping: list[int], extra_controls: list[int] = []) -> "Gate":
+        """The same gate with its qubits rewritten through `mapping`.
+
+        This is how a program built on one register is replayed onto another
+        (see `CircuitGate`); `extra_controls` are appended, which is how a
+        control on the outer gate conditions every gate inside it.
+        """
+        return Gate(
+            self.matrix,
+            [mapping[index] for index in self.controls] + list(extra_controls),
+            [mapping[index] for index in self.targets],
+            self.name,
+            self.params,
+            self.inverted,
+        )
+
+
+def bit_mask(positions) -> int:
+    """One integer whose set bits are exactly `positions` (1 << position each)."""
+    mask = 0
+    for position in positions:
+        mask |= 1 << position
+    return mask
+
+
+def gate_offsets(target_bits: list[int]) -> np.ndarray:
+    """The physical bit each value of the gate's own little index sets.
+
+    `target_bits[0]` is the gate matrix's most significant bit, so entry `v`
+    of the result is the basis offset of gate column/row `v`.
+    """
+    num_targets = len(target_bits)
+    offsets = np.zeros(1 << num_targets, dtype=np.int64)
+    for gate_bit, position in enumerate(target_bits):
+        gate_value = (np.arange(1 << num_targets, dtype=np.int64) >> (num_targets - 1 - gate_bit)) & 1
+        offsets |= gate_value << position
+    return offsets
+
 
 def embedded_gate(gate_matrix: np.ndarray, num_qubits: int,
                   target_bits: list[int], control_bits: list[int]) -> np.ndarray:
@@ -60,32 +115,21 @@ def embedded_gate(gate_matrix: np.ndarray, num_qubits: int,
 
     `target_bits` and `control_bits` are bit positions counted from the least
     significant bit. The gate only touches basis states where every control is
-    1; every other basis state is left alone.
+    1; every other basis state is left alone. Only used for 3+ target gates.
     """
     dimension = 1 << num_qubits
     basis = np.arange(dimension, dtype=np.int64)
-    num_targets = len(target_bits)
-
-    # Bit position of each target inside the gate's own little matrix.
-    offsets = np.zeros(1 << num_targets, dtype=np.int64)
-    for gate_bit, position in enumerate(target_bits):
-        gate_value = (np.arange(1 << num_targets, dtype=np.int64) >> (num_targets - 1 - gate_bit)) & 1
-        offsets |= gate_value << position
+    offsets = gate_offsets(target_bits)
 
     # Basis states where all controls are 1 and all targets are 0.
-    usable = np.ones(dimension, dtype=bool)
-    for position in control_bits:
-        usable &= ((basis >> position) & 1) == 1
-
-    target_mask = 0
-    for position in target_bits:
-        target_mask |= 1 << position
-    usable &= (basis & target_mask) == 0
+    control_mask = bit_mask(control_bits)
+    target_mask = bit_mask(target_bits)
+    usable = ((basis & control_mask) == control_mask) & ((basis & target_mask) == 0)
     anchors = basis[usable]
 
     full_matrix = np.eye(dimension, dtype=complex)
-    for row in range(1 << num_targets):
-        for column in range(1 << num_targets):
+    for row in range(len(offsets)):
+        for column in range(len(offsets)):
             full_matrix[anchors + offsets[row], anchors + offsets[column]] = gate_matrix[row, column]
 
     return full_matrix
@@ -111,42 +155,210 @@ class CompositeGate:
         self.body(qc, targets, controls)
 
 
+class CircuitGate:
+    """A whole circuit usable as one gate: a program built on its own register.
+
+    `CircuitGate.build(name, width, builder)` runs `builder(qc, qubits)` on a
+    scratch register of `width` qubits and keeps whatever it recorded. Applying
+    the result replays that program onto the parent's target qubits, so
+    `qc.apply(qft_gate(4), qc[0:4])` works exactly like running the QFT circuit
+    by hand -- and `op_hist` still holds the individual gates, so `uncompute`
+    and `to_openqasm3` see the real operations rather than an opaque block.
+    """
+
+    def __init__(self, name: str, width: int, program: list[Gate],
+                 params: list[float] | None = None):
+        self.name = name
+        self.width = width
+        self.program = list(program)
+        self.params = list(params) if params else []
+
+    def __repr__(self):
+        return f"<circuit {self.name}: {len(self.program)} gate(s) on {self.width} qubit(s)>"
+
+    @classmethod
+    def build(cls, name: str, width: int, builder, params: list[float] | None = None) -> "CircuitGate":
+        """Record `builder(qc, qubits)` on a scratch register and keep the program."""
+        scratch = QuantumComputer(width, name=name)
+        builder(scratch, scratch.qubits)
+        return cls(name, width, scratch.op_hist, params)
+
+    def inverse(self) -> "CircuitGate":
+        """The same circuit backwards: every gate inverted, in reverse order."""
+        return CircuitGate(
+            self.name,
+            self.width,
+            [gate.inverse() for gate in reversed(self.program)],
+            self.params,
+        )
+
+    def __call__(self, qc: "QuantumComputer", targets: list[int], controls: list[int]):
+        targets = [qc.index_of(target) for target in targets]
+        if len(targets) != self.width:
+            raise ValueError(
+                f"'{self.name}' acts on {self.width} qubit(s), got {len(targets)} target(s)."
+            )
+        extra = [qc.index_of(control) for control in controls]
+        qc._apply_program([gate.remap(targets, extra) for gate in self.program])
+
+
+@njit(parallel=True)
+def _apply_gate_kernel(state, new_state, matrix, target_mask: int,
+                       control_mask: int, offsets, num_values: int):
+    """Read every amplitude once, write every amplitude once.
+
+    `state` and `new_state` are the same length; `matrix` is the gate acting on
+    the targets, laid out row-major over `num_values` = 2**targets entries.
+
+    Basis states are split three ways: those failing a control are copied
+    through, those setting a target bit are left for their anchor (the same
+    state with the target bits cleared, which owns the whole block), and the
+    anchors read their block, multiply it by the gate, and write it back.
+    """
+    for basis in prange(state.shape[0]):
+        if (basis & control_mask) != control_mask:
+            new_state[basis] = state[basis]
+        elif (basis & target_mask) == 0:
+            for row in range(num_values):
+                amplitude = matrix[row * num_values] * state[basis | offsets[0]]
+                for column in range(1, num_values):
+                    amplitude += matrix[row * num_values + column] * state[basis | offsets[column]]
+                new_state[basis | offsets[row]] = amplitude
+
+
 def apply_local_gate(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
-                     target_bits: list[int], control_bits: list[int]) -> np.ndarray:
+                     target_bits: list[int], control_bits: list[int],
+                     out: np.ndarray | None = None) -> np.ndarray:
     """Apply a gate to one or two targets without building a 2**n matrix.
 
     As everywhere else in the simulator, `gate_matrix` acts on the targets
-    only and the controls say where that action is conditional.
+    only and the controls say where that action is conditional. `num_qubits`
+    describes the register `state` belongs to.
 
-    The state is viewed as one axis per qubit. Control axes are moved just
-    before the target axes, so the flattened pair of axes reads as
-    (controls, targets) with the first qubit of each group as the most
-    significant bit. Only the block where every control reads 1 is multiplied
-    by the gate. Cost is O(2**num_qubits) instead of O(4**num_qubits), which is
-    what makes wide registers like Shor's practical.
+    The work is a single fused pass over the amplitudes, done in parallel by
+    `_apply_gate_kernel`, so cost is O(2**num_qubits) instead of the
+    O(4**num_qubits) of `embedded_gate` -- which is what makes wide registers
+    like Shor's practical at all.
+
+    `state` is never written to. Pass `out=` to choose where the result lands;
+    reusing one buffer across gates is what keeps the cost near a plain copy,
+    since a fresh 32 MB array would fault in new pages every gate.
     """
-    num_targets, num_controls = len(target_bits), len(control_bits)
-    tensor = state.reshape([2] * num_qubits)
+    if state.size != 1 << num_qubits:
+        raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
 
-    # Axis 0 of the tensor is the most significant bit, so flip the bit positions.
-    target_axes = [num_qubits - 1 - bit for bit in target_bits]
-    control_axes = [num_qubits - 1 - bit for bit in control_bits]
+    flat = state.reshape(-1)
+    if out is None:
+        new_state = np.empty_like(flat)
+    else:
+        new_state = out.reshape(-1)
+        if new_state.size != flat.size:
+            raise ValueError(f"`out` holds {new_state.size} amplitudes, expected {flat.size}.")
+        if np.shares_memory(new_state, flat):
+            raise ValueError("`out` must not overlap `state`; the gate needs both at once.")
 
-    # Controls occupy the axes before the targets; targets go last.
-    first = num_qubits - num_controls - num_targets
-    control_slots = list(range(first, first + num_controls))
-    target_slots = list(range(first + num_controls, num_qubits))
-    moved_axes = control_axes + target_axes
+    _apply_gate_kernel(
+        flat,
+        new_state,
+        np.asarray(gate_matrix, dtype=complex).ravel(),
+        bit_mask(target_bits),
+        bit_mask(control_bits),
+        gate_offsets(target_bits),
+        1 << len(target_bits),
+    )
+    return new_state.reshape(-1, 1)
 
-    tensor = np.moveaxis(tensor, moved_axes, control_slots + target_slots)
-    blocks = tensor.reshape(-1, 1 << num_controls, 1 << num_targets).copy()
 
-    # The last control block is the one with every control qubit reading 1.
-    blocks[:, -1, :] = blocks[:, -1, :] @ gate_matrix.T
+def _is_diagonal_local(gate: Gate) -> bool:
+    """True for a single-target gate with nothing off the diagonal (a phase)."""
+    return (
+        len(gate.targets) == 1
+        and gate.matrix.shape == (2, 2)
+        and gate.matrix[0, 1] == 0
+        and gate.matrix[1, 0] == 0
+    )
 
-    tensor = blocks.reshape([2] * num_qubits)
-    tensor = np.moveaxis(tensor, control_slots + target_slots, moved_axes)
-    return tensor.reshape(-1, 1)
+
+def _is_swap_local(gate: Gate) -> bool:
+    """True for a plain SWAP: two targets, no controls, the swap matrix."""
+    return (
+        len(gate.targets) == 2
+        and not gate.controls
+        and gate.matrix.shape == (4, 4)
+        and np.array_equal(gate.matrix, gm.swap_MAT)
+    )
+
+
+@njit(parallel=True)
+def _fused_diagonal_kernel(new_state, state, control_masks, target_bits, diag0, diag1):
+    """Apply a whole run of diagonal single-target gates in one pass.
+
+    Each gate is `diag(a, b)` on its own target with its own controls, so the
+    combined action on a basis state is one complex product computed inline.
+    Fusing a run this way replaces one read+write of the state per gate with a
+    single pass per run, which is what makes the QFT's t(t+1)/2 controlled
+    phases cost t passes instead of t(t+1)/2.
+    """
+    num_gates = control_masks.shape[0]
+    for basis in prange(state.shape[0]):
+        value = 1.0 + 0.0j
+        for gate_index in range(num_gates):
+            if (basis & control_masks[gate_index]) == control_masks[gate_index]:
+                if (basis >> target_bits[gate_index]) & 1:
+                    value *= diag1[gate_index]
+                else:
+                    value *= diag0[gate_index]
+        new_state[basis] = state[basis] * value
+
+
+def _fused_diagonal_numpy(new_state, state, control_masks, target_bits, diag0, diag1):
+    """NumPy stand-in for `_fused_diagonal_kernel` when numba is unavailable."""
+    basis = np.arange(state.shape[0], dtype=np.int64)
+    value = np.ones(state.shape[0], dtype=complex)
+    for gate_index in range(len(control_masks)):
+        allowed = (basis & control_masks[gate_index]) == control_masks[gate_index]
+        bit = (basis >> target_bits[gate_index]) & 1
+        value *= np.where(
+            allowed,
+            np.where(bit == 1, diag1[gate_index], diag0[gate_index]),
+            1.0 + 0.0j,
+        )
+    new_state[:] = state * value
+
+
+@njit(parallel=True)
+def _swap_run_kernel(new_state, state, pairs):
+    """Apply a run of disjoint SWAPs as one permutation pass over the state.
+
+    `pairs` holds the two bit positions each swap exchanges. Disjoint swaps
+    compose into a single involution, so every amplitude moves exactly once:
+    this is the whole bit-reversal layer of a QFT in one read + one write
+    instead of n/2 gate applications.
+    """
+    num_pairs = pairs.shape[0]
+    for basis in prange(state.shape[0]):
+        # numba's parfor pass mis-infers the prange index as float64 once it
+        # is carried through a loop-reassigned alias; the cast keeps it int.
+        swapped = np.int64(basis)
+        for pair_index in range(num_pairs):
+            low = pairs[pair_index, 0]
+            high = pairs[pair_index, 1]
+            bit_low = (swapped >> low) & 1
+            bit_high = (swapped >> high) & 1
+            swapped = (swapped & ~(1 << low) & ~(1 << high)) | (bit_low << high) | (bit_high << low)
+        new_state[basis] = state[swapped]
+
+
+def _swap_run_numpy(new_state, state, pairs):
+    """NumPy stand-in for `_swap_run_kernel` when numba is unavailable."""
+    swapped = np.arange(state.shape[0], dtype=np.int64)
+    for pair_index in range(pairs.shape[0]):
+        low = pairs[pair_index, 0]
+        high = pairs[pair_index, 1]
+        bit_low = (swapped >> low) & 1
+        bit_high = (swapped >> high) & 1
+        swapped = (swapped & ~(1 << low) & ~(1 << high)) | (bit_low << high) | (bit_high << low)
+    new_state[:] = state[swapped]
 
 
 class Qubit:
@@ -212,6 +424,7 @@ class QuantumComputer:
         self.state_vector[0, 0] = 1.0
         self.op_hist: list[Gate] = []
         self._recording = True
+        self._scratch: np.ndarray | None = None
 
         if qubit_names is None:
             self.qubits: list[Qubit] = [Qubit(self, i, f"q{i}") for i in range(num_qubits)]
@@ -262,8 +475,8 @@ class QuantumComputer:
         raise TypeError("Key must be a Qubit, integer index, string name, or slice.")
 
     def __repr__(self):
-        listed = "\n  └─ ".join(str(qubit) for qubit in self.qubits)
-        return f"System: {self.name} ({self.num_qubits} Qubits)\n  └─ {listed}"
+        listed = "\n  +- ".join(str(qubit) for qubit in self.qubits)
+        return f"System: {self.name} ({self.num_qubits} Qubits)\n  +- {listed}"
 
     def index_of(self, qubit: Qubit | int | str) -> int:
         """Accept a handle, an index, or a name wherever a qubit is expected."""
@@ -281,10 +494,36 @@ class QuantumComputer:
         control_qubits: list[Qubit | int | str] | None = None,
         qasm_name: str | None = None,
         qasm_params: list[float] | None = None,
-        log_history: bool = True,
+        log_history: bool | None = None,
     ):
         """Apply a gate, optionally controlled, to the given qubits."""
-        gate = Gate(
+        gate = self.gate(
+            gate_matrix, target_qubits, control_qubits, qasm_name, qasm_params
+        )
+
+        record = self._recording
+        if log_history is not None:
+            record = bool(log_history)
+
+        self._run(gate)
+        if record and self._recording:
+            self.op_hist.append(gate)
+
+    def gate(
+        self,
+        gate_matrix: np.ndarray,
+        target_qubits: list[Qubit | int | str],
+        control_qubits: list[Qubit | int | str] | None = None,
+        qasm_name: str | None = None,
+        qasm_params: list[float] | None = None,
+    ) -> Gate:
+        """Build a gate record without applying it.
+
+        This is how programs are written: gather records, then hand the list to
+        `qc.apply([...])`, which runs them with diagonal runs fused into a
+        single pass over the state.
+        """
+        return Gate(
             gate_matrix,
             controls=[self.index_of(qubit) for qubit in (control_qubits or [])],
             targets=[self.index_of(qubit) for qubit in target_qubits],
@@ -292,21 +531,38 @@ class QuantumComputer:
             params=qasm_params,
         )
 
-        self._run(gate)
-        if log_history and self._recording:
-            self.op_hist.append(gate)
-
     def apply(
         self,
-        operation: np.ndarray | CompositeGate,
-        target_qubits: list[Qubit | int | str],
+        operation: np.ndarray | CompositeGate | CircuitGate | Gate | list[Gate],
+        target_qubits: list[Qubit | int | str] | None = None,
         control_qubits: list[Qubit | int | str] | None = None,
     ):
-        """Apply a matrix gate, or a composite operation built from other gates.
+        """Apply a matrix, a gate record, a program, or a composite operation.
 
-        Both take the same operands, so `qc.apply(gm.h_MAT, [0])` and
-        `qc.apply(crk(3), [0], control_qubits=[1])` read the same way.
+        All forms read the same way, so `qc.apply(gm.h_MAT, [0])`,
+        `qc.apply(crk(3), [0], control_qubits=[1])` and
+        `qc.apply(qft_gate(3), qc[0:3])` sit side by side. A program
+        (`qc.apply([gate1, gate2, ...])`) picks its own qubits, so it takes no
+        target operand; extra `control_qubits` condition every gate in it.
         """
+        if isinstance(operation, (list, tuple)):
+            gates = list(operation)
+            if target_qubits:
+                raise ValueError("A program names its own qubits; drop the target operand.")
+            if control_qubits:
+                extra = [self.index_of(qubit) for qubit in control_qubits]
+                identity = list(range(self.num_qubits))
+                gates = [gate.remap(identity, extra) for gate in gates]
+            self._apply_program(gates)
+            return
+
+        if isinstance(operation, Gate):
+            self._apply_program([operation])
+            return
+
+        if target_qubits is None:
+            raise ValueError("This operation needs target qubits.")
+
         if callable(operation):
             operation(
                 self,
@@ -316,21 +572,151 @@ class QuantumComputer:
         else:
             self.apply_gate(operation, target_qubits, control_qubits)
 
-    def _run(self, gate: Gate):
-        """Advance the state by one gate, without touching the history."""
+    def _validate_gate(self, gate: Gate):
+        """Check a gate against the register before any amplitude is touched."""
+        if not isinstance(gate, Gate):
+            raise TypeError(f"Expected a Gate, got {type(gate).__name__}.")
+
         for index in gate.controls + gate.targets:
             self.qubits[index]._assert_alive()
+
+        if set(gate.controls) & set(gate.targets):
+            raise ValueError("Control and target qubits must be disjoint.")
+
+        side = 1 << len(gate.targets)
+        if gate.matrix.shape != (side, side):
+            raise ValueError(
+                f"A gate on {len(gate.targets)} target(s) needs a {side}x{side} matrix, "
+                f"got {gate.matrix.shape}."
+            )
+
+    def _apply_program(self, program: list[Gate]):
+        """Run a list of gates, batching the runs that can share a pass.
+
+        Consecutive diagonal gates become one phase pass and consecutive
+        disjoint SWAPs one permutation pass; everything else goes through
+        `_run`. Only the execution is batched: `op_hist` receives the
+        individual gates, so `uncompute` and `to_openqasm3` still see `cp`
+        after `cp`.
+        """
+        gates = list(program)
+        for gate in gates:
+            self._validate_gate(gate)
+
+        record = self._recording
+        index = 0
+        while index < len(gates):
+            gate = gates[index]
+
+            if _is_diagonal_local(gate):
+                run_end = index + 1
+                while run_end < len(gates) and _is_diagonal_local(gates[run_end]):
+                    run_end += 1
+                batch = gates[index:run_end]
+                if len(batch) == 1:
+                    self._run(batch[0])
+                else:
+                    self._apply_diagonal_run(batch)
+
+            elif _is_swap_local(gate):
+                # Overlapping swaps do not commute, so the run stops at the
+                # first shared qubit.
+                touched = set(gate.targets)
+                run_end = index + 1
+                while (
+                    run_end < len(gates)
+                    and _is_swap_local(gates[run_end])
+                    and not touched & set(gates[run_end].targets)
+                ):
+                    touched.update(gates[run_end].targets)
+                    run_end += 1
+                batch = gates[index:run_end]
+                if len(batch) == 1:
+                    self._run(batch[0])
+                else:
+                    self._apply_swap_run(batch)
+
+            else:
+                self._run(gate)
+                run_end = index + 1
+                batch = [gate]
+
+            if record:
+                self.op_hist.extend(batch)
+            index = run_end
+
+    def _apply_swap_run(self, gates: list[Gate]):
+        """Apply several disjoint SWAPs in one permutation pass."""
+        pairs = np.array(
+            [
+                [self.bit_position(gate.targets[0]), self.bit_position(gate.targets[1])]
+                for gate in gates
+            ],
+            dtype=np.int64,
+        )
+
+        flat = self.state_vector.reshape(-1)
+        if self._scratch is None or self._scratch.shape != self.state_vector.shape:
+            self._scratch = np.empty_like(self.state_vector)
+        out = self._scratch.reshape(-1)
+
+        if HAVE_NUMBA:
+            _swap_run_kernel(out, flat, pairs)
+        else:
+            _swap_run_numpy(out, flat, pairs)
+
+        previous_state = self.state_vector
+        self.state_vector = out.reshape(-1, 1)
+        self._scratch = previous_state
+
+    def _apply_diagonal_run(self, gates: list[Gate]):
+        """Apply several diagonal single-target gates in one pass over the state."""
+        control_masks = np.array(
+            [bit_mask(self.bit_position(index) for index in gate.controls) for gate in gates],
+            dtype=np.int64,
+        )
+        target_bits = np.array(
+            [self.bit_position(gate.targets[0]) for gate in gates], dtype=np.int64
+        )
+        diag0 = np.array([gate.matrix[0, 0] for gate in gates], dtype=complex)
+        diag1 = np.array([gate.matrix[1, 1] for gate in gates], dtype=complex)
+
+        flat = self.state_vector.reshape(-1)
+        if self._scratch is None or self._scratch.shape != self.state_vector.shape:
+            self._scratch = np.empty_like(self.state_vector)
+        out = self._scratch.reshape(-1)
+
+        if HAVE_NUMBA:
+            _fused_diagonal_kernel(out, flat, control_masks, target_bits, diag0, diag1)
+        else:
+            _fused_diagonal_numpy(out, flat, control_masks, target_bits, diag0, diag1)
+
+        previous_state = self.state_vector
+        self.state_vector = out.reshape(-1, 1)
+        self._scratch = previous_state
+
+    def _run(self, gate: Gate):
+        """Advance the state by one gate, without touching the history."""
+        self._validate_gate(gate)
 
         control_bits = [self.bit_position(index) for index in gate.controls]
         target_bits = [self.bit_position(index) for index in gate.targets]
 
+        if self._scratch is None or self._scratch.shape != self.state_vector.shape:
+            self._scratch = np.empty_like(self.state_vector)
+
+        # The result lands in the scratch buffer and the two swap, so the
+        # amplitudes are only ever written into a buffer that is already warm.
+        previous_state = self.state_vector
         if len(target_bits) <= 2:
             self.state_vector = apply_local_gate(
-                self.state_vector, gate.matrix, self.num_qubits, target_bits, control_bits
+                self.state_vector, gate.matrix, self.num_qubits, target_bits,
+                control_bits, out=self._scratch,
             )
         else:
             full_matrix = embedded_gate(gate.matrix, self.num_qubits, target_bits, control_bits)
-            self.state_vector = full_matrix @ self.state_vector
+            self.state_vector = np.matmul(full_matrix, self.state_vector, out=self._scratch)
+        self._scratch = previous_state
 
     @contextmanager
     def suppress_history(self):

@@ -66,13 +66,13 @@ def _gate_call(gate) -> str:
             "Apply it with qasm_name= (and qasm_params=) so it can be written out."
         )
 
-    if name == "U":
-        arguments = "(theta, phi, lambda) "
+    if params:
+        call = f"{name}(" + ", ".join(repr(value) for value in params) + ") "
     else:
-        arguments = "".join(f"{value!r}, " for value in params)
+        call = f"{name} "
 
     operands = ", ".join(f"q[{index}]" for index in gate.controls + gate.targets)
-    return f"{_modifiers(name, gate)}{name} {arguments}{operands};"
+    return f"{_modifiers(name, gate)}{call}{operands};"
 
 
 def to_openqasm3(num_qubits: int, circuit_name: str, gates: list) -> str:

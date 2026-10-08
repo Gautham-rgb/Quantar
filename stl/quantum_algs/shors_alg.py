@@ -1,9 +1,10 @@
 """Shor's factoring algorithm.
 
 The QFT is not built as one dense 2**n x 2**n matrix (which would need
-terabytes for a realistic register). It is decomposed into Hadamards and
-controlled phase shifts, `CR_k`, so each gate only touches the qubits it acts
-on. For N = 91 that is 21 qubits, and factoring takes a couple of seconds.
+terabytes for a realistic register). It is decomposed into Hadamards,
+controlled phase shifts, `CR_k`, and a bit-reversing layer of swaps, so each
+gate only touches the qubits it acts on. For N = 91 that is 21 qubits, and
+factoring takes a couple of seconds.
 
 `quantum_subroutine` still cheats the modular exponentiation classically: it
 writes the state |k>|a**k mod N> directly instead of running the gates that
@@ -15,38 +16,110 @@ from fractions import Fraction
 from math import gcd
 
 import numpy as np
+import numba as nb
 
 import quantum.gate_matrix as gm
 import quantum.qubit_abs as qa
-from quantum.composites import crk
+
+@nb.jit(nopython=True)
+def mod_exp(a: int, t: int, N: int):
+    num_elements = 1 << t
+    out = np.empty(num_elements, dtype=np.int64)
+
+    current = 1
+    out[0] = current
+    for k in range(1, num_elements):
+        current = (current * a) % N
+        out[k] = current
+
+    return out
+
+def qft_program(qc: qa.QuantumComputer, qubits: list) -> list[qa.Gate]:
+    """The QFT as gate records: a bit-reversal, then Hadamards and `CR_k` phases.
+
+    Matches the dense `gate_matrix.qft_MAT`, with `qubits[0]` the most
+    significant bit. The leading swaps undo the bit-reversal that the
+    H-first-on-the-LSB sequence would otherwise bake into the input. Hand the
+    result to `qc.apply`, which fuses each run of controlled phases into a
+    single pass over the state.
+    """
+    n = len(qubits)
+    program = []
+    for left in range(n // 2):
+        program.append(
+            qc.gate(gm.swap_MAT, [qubits[left], qubits[n - 1 - left]], qasm_name="swap")
+        )
+    for control in range(n - 1, -1, -1):
+        program.append(qc.gate(gm.h_MAT, [qubits[control]]))
+        for target in range(control):
+            angle = float((2 * np.pi) / (1 << (control - target + 1)))
+            program.append(
+                qc.gate(
+                    gm.p_MAT(angle),
+                    [qubits[target]],
+                    [qubits[control]],
+                    qasm_name="cp",
+                    qasm_params=[angle],
+                )
+            )
+    return program
+
+
+def iqft_program(qc: qa.QuantumComputer, qubits: list) -> list[qa.Gate]:
+    """Inverse QFT as gate records: the QFT program in reverse, each gate inverted.
+
+    Phases come first (negated), then the Hadamards, then the swaps -- exactly
+    `qft_program` backwards, so `qft_circuit` followed by `iqft_circuit` returns
+    the input and both match the dense `qft_MAT` / `iqft_MAT`.
+    """
+    n = len(qubits)
+    program = []
+    for control in range(n):
+        for target in range(control - 1, -1, -1):
+            angle = float(-(2 * np.pi) / (1 << (control - target + 1)))
+            program.append(
+                qc.gate(
+                    gm.p_MAT(angle),
+                    [qubits[target]],
+                    [qubits[control]],
+                    qasm_name="cp",
+                    qasm_params=[angle],
+                )
+            )
+        program.append(qc.gate(gm.h_MAT, [qubits[control]]))
+    for left in range(n // 2):
+        program.append(
+            qc.gate(gm.swap_MAT, [qubits[left], qubits[n - 1 - left]], qasm_name="swap")
+        )
+    return program
 
 
 def qft_circuit(qc: qa.QuantumComputer, qubits: list):
-    """Quantum Fourier transform built from Hadamards and `crk` operations.
-
-    Matches the dense `gate_matrix.qft_MAT`, with `qubits[0]` the most
-    significant bit. n Hadamards plus n(n-1)/2 controlled phase shifts.
-    """
-    for control in range(len(qubits) - 1, -1, -1):
-        qc.apply(gm.h_MAT, [qubits[control]])
-        for target in range(control):
-            qc.apply(
-                crk(control - target + 1),
-                [qubits[target]],
-                control_qubits=[qubits[control]],
-            )
+    """Quantum Fourier transform built from Hadamards and `crk` operations."""
+    qc.apply(qft_program(qc, qubits))
 
 
 def iqft_circuit(qc: qa.QuantumComputer, qubits: list):
     """Inverse QFT: the QFT operations in reverse, each one inverted."""
-    for control in range(len(qubits)):
-        for target in range(control - 1, -1, -1):
-            qc.apply(
-                crk(control - target + 1, inverse=True),
-                [qubits[target]],
-                control_qubits=[qubits[control]],
-            )
-        qc.apply(gm.h_MAT, [qubits[control]])
+    qc.apply(iqft_program(qc, qubits))
+
+
+_QFT_GATES: dict[int, qa.CircuitGate] = {}
+_IQFT_GATES: dict[int, qa.CircuitGate] = {}
+
+
+def qft_gate(width: int) -> qa.CircuitGate:
+    """The `width`-qubit QFT as one gate: `qc.apply(qft_gate(4), qc[0:4])`."""
+    if width not in _QFT_GATES:
+        _QFT_GATES[width] = qa.CircuitGate.build("qft", width, qft_circuit)
+    return _QFT_GATES[width]
+
+
+def iqft_gate(width: int) -> qa.CircuitGate:
+    """The inverse QFT as one gate: `qc.apply(iqft_gate(4), qc[0:4])`."""
+    if width not in _IQFT_GATES:
+        _IQFT_GATES[width] = qa.CircuitGate.build("inv_qft", width, iqft_circuit)
+    return _IQFT_GATES[width]
 
 
 def is_prime_fast(n: int) -> bool:
@@ -72,7 +145,7 @@ def is_perfect_power(N: int):
         high = N
 
         while low <= high:
-            mid = (low + high) // 2
+            mid = (low + high) >> 1
             val = mid ** y
 
             if val > N:
@@ -97,7 +170,7 @@ def quantum_subroutine(N: int, a: int) -> str:
     # |k>|a**k mod N> for every k, written straight into the state vector.
     exponents = np.arange(1 << t)
     register1 = exponents << m
-    register2 = np.array([pow(a, int(k), N) for k in exponents])
+    register2 = mod_exp(a, t, N)
     state = np.zeros((1 << tot_qubits, 1), dtype=complex)
     state[register1 | register2, 0] = 1.0 / np.sqrt(1 << t)
 
@@ -106,9 +179,10 @@ def quantum_subroutine(N: int, a: int) -> str:
 
     iqft_circuit(qc, qc[0:t])
 
-    probabilities = np.abs(qc.state_vector.flatten()) ** 2
-    highest_prob_index = int(np.argmax(probabilities))
-    return f"{highest_prob_index:0{tot_qubits}b}"[:t]
+    probabilities = np.square(np.abs(qc.state_vector.ravel()))
+    probabilities[: 1 << m] = -1.0
+    strongest = int(np.argmax(probabilities))
+    return f"{strongest:0{tot_qubits}b}"[:t]
 
 
 def shors_alg(N: int):
@@ -120,7 +194,7 @@ def shors_alg(N: int):
         return factors
 
     if N % 2 == 0:
-        return 2, N // 2
+        return 2, N >> 1
 
     while True:
         a = np.random.randint(2, N)
@@ -141,10 +215,10 @@ def shors_alg(N: int):
 
         if r == 0 or r % 2 != 0:
             continue
-        if pow(a, r // 2, N) == N - 1:
+        if pow(a, r >> 1, N) == N - 1:
             continue
 
-        val = pow(a, r // 2, N)
+        val = pow(a, r >> 1, N)
         factor1 = gcd(val - 1, N)
         factor2 = gcd(val + 1, N)
 
@@ -157,7 +231,7 @@ def shors_alg(N: int):
 
 if __name__ == "__main__":
     import time
-
-    for target in (91, 15, 21):
-        start = time.time()
-        print(target, "->", shors_alg(target), f"({time.time() - start:.2f}s)")
+    t0 = time.time()
+    print(shors_alg(403))
+    t1 = time.time()
+    print(f"time taken: {t1 - t0}s")

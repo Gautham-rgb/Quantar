@@ -1,19 +1,26 @@
- [build-system]
- requires = ["hatchling"]
- build-backend = "hatchling.build"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
- [project]
- name = "quantar"
- dynamic = ["__version__"]
- dependencies = [
+[project]
+name = "Quantar"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "numba",
+    "openqasm3[parser]",
+]
+
+[project.optional-dependencies]
+backends = [
     "pennylane",
     "qiskit",
     "qbraid",
     "qiskit-aer",
-    "openqasm3",
-    "numpy", 
-    "numba"
 ]
 
- [tool.hatch.version]
- path = "quantar/__init__.py"
+[tool.hatch.version]
+path = "__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quantum", "stl"]
