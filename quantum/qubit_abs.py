@@ -20,7 +20,11 @@ from typing import overload
 
 import numpy as np
 import numpy.random as rnd
-
+from typing import Callable
+import re
+import tokenize
+import io
+from typing import Any
 try:
     from numba import njit, prange
     HAVE_NUMBA = True
@@ -34,6 +38,155 @@ except Exception:
 
 from quantum.qasm import to_openqasm3
 import quantum.gate_matrix as gm
+# ─── Local operator registry (for @operator decorator) ───
+_global_operators: dict[str, Any] = {}
+_operator_metadata: dict[str, dict[str, Any]] = {}
+
+from quantar.operators import (
+    get_global_operator, get_global_operator_matrix,
+    get_operator_kind, get_operator_requires_instance,
+    list_operators, apply_operator,
+)
+
+
+def operator(name: str, kind: str = "matrix"):
+    """Decorator to register a custom operator with an arbitrary name.
+
+    The name can be any string: capital letters, symbols, unicode, etc.
+    Works as a function decorator, method decorator, class decorator,
+    or with any Python/Quantar class.
+
+    Args:
+        name: Operator name (any string: "H", "X", "CNOT", "<->", "⟂", etc.)
+        kind: Operator kind - "matrix" (default, returns numpy array), 
+              "unary" (callable taking target), "binary" (callable taking control, target),
+              "callable" (generic callable, inspected at runtime)
+
+    Usage:
+        @operator("H")
+        def hadamard():
+            return gm.h_MAT
+
+        @operator("CNOT", kind="binary")
+        def cnot(self, control, target):
+            self.qc.apply_cnot(control, target)
+
+        @operator("H", kind="unary")
+        def hadamard(self, target):
+            self.qc.apply_h(target)
+
+        @operator("PRINT", kind="callable")
+        def print_state(qc):
+            print(qc.state)
+    """
+    def decorator(func: Callable):
+        if not isinstance(name, str) or not name:
+            raise ValueError("Operator name must be a non-empty string")
+        
+        if kind not in ("matrix", "unary", "binary", "callable"):
+            raise ValueError(f"Invalid kind: {kind}. Must be 'matrix', 'unary', 'binary', or 'callable'")
+        
+        # Handle different function types
+        if isinstance(func, (staticmethod, classmethod)):
+            func = func.__func__
+        
+        # For matrix kind, try to call to get matrix immediately
+        if kind == "matrix":
+            try:
+                matrix = func()
+            except TypeError as e:
+                if "missing 1 required positional argument: 'self'" in str(e):
+                    def wrapper(instance):
+                        return func(instance)
+                    wrapper._quantar_operator_name = name
+                    wrapper._quantar_is_operator = True
+                    wrapper._quantar_requires_instance = True
+                    wrapper._quantar_kind = "matrix"
+                    _global_operators[name] = wrapper
+                    func._quantar_operator_name = name
+                    func._quantar_is_operator = True
+                    func._quantar_requires_instance = True
+                    func._quantar_kind = "matrix"
+                    return func
+                raise
+            
+            if not isinstance(matrix, np.ndarray):
+                raise ValueError(f"Operator function '{name}' must return a numpy array")
+            
+            _global_operators[name] = matrix
+            func._quantar_operator_name = name
+            func._quantar_is_operator = True
+            func._quantar_requires_instance = False
+            func._quantar_kind = "matrix"
+            return func
+        
+        # For unary/binary/callable kinds, store the callable directly
+        # These will be called at execution time with appropriate arguments
+        func._quantar_operator_name = name
+        func._quantar_is_operator = True
+        func._quantar_requires_instance = "self" in func.__code__.co_varnames
+        func._quantar_kind = kind
+        
+        # For callable kind, we don't try to call it now
+        _global_operators[name] = func
+        
+        return func
+    
+    return decorator
+
+
+def get_global_operator(name: str):
+    """Retrieve a globally registered operator by name.
+    
+    Returns a tuple of (operator, kind) where kind is one of:
+    'matrix', 'unary', 'binary', 'callable', or None if not found.
+    """
+    op = _global_operators.get(name)
+    if op is None:
+        return None, None
+    kind = getattr(op, '_quantar_kind', 'matrix')
+    return op, kind
+
+
+def get_global_operator_matrix(name: str):
+    """Retrieve a globally registered matrix operator by name."""
+    op, kind = get_global_operator(name)
+    if kind == 'matrix':
+        return op
+    return None
+
+
+def list_global_operators() -> list[str]:
+    """List all globally registered operator names."""
+    return list(_global_operators.keys())
+
+
+def preprocess_quantar_source(source: str) -> str:
+    """Pre-process Quantar source to handle custom operators.
+    
+    Replaces registered custom operators with space-padded versions
+    so Python's tokenizer treats them as single OP tokens.
+    """
+    operators = sorted(list_global_operators(), key=len, reverse=True)
+    if not operators:
+        return source
+    
+    # Escape special regex chars and build pattern (longest first)
+    escaped = [re.escape(op) for op in operators]
+    pattern = '|'.join(escaped)
+    
+    def replace_op(match):
+        op = match.group(0)
+        # Replace with space-padded version so tokenizer sees it as single OP
+        return f' {op} '
+    
+    return re.sub(pattern, replace_op, source)
+
+
+def make_quantar_tokenizer(source: str):
+    """Create a tokenizer for Quantar source with custom operator support."""
+    processed = preprocess_quantar_source(source)
+    return tokenize.generate_tokens(io.StringIO(processed).readline)
 
 
 class Gate:
@@ -361,6 +514,53 @@ def _swap_run_numpy(new_state, state, pairs):
     new_state[:] = state[swapped]
 
 
+# ============================================================
+# Fast QFT/IQFT using dense matrices for small registers
+# ============================================================
+
+def _qft_dense_matrix(num_targets: int, inverse: bool = False) -> np.ndarray:
+    """Return the dense QFT or IQFT matrix for the given number of targets."""
+    from quantum.gate_matrix import qft_MAT, iqft_MAT
+    return iqft_MAT(num_targets) if inverse else qft_MAT(num_targets)
+
+
+def _qft_dense_apply(state, out, qubit_bits: np.ndarray, inverse: bool):
+    """Apply QFT/IQFT using dense matrix multiplication for small registers.
+    
+    Assumes the target qubits are the entire register (no spectators).
+    """
+    num_targets = len(qubit_bits)
+    if num_targets == 0:
+        return
+
+    # Get dense matrix
+    matrix = _qft_dense_matrix(len(qubit_bits), inverse=inverse)
+
+    # Apply matrix to the state vector
+    out[:] = (matrix @ state.reshape(-1, 1)).flatten()
+
+
+def _qft_numpy(state, new_state, qubit_bits: np.ndarray, inverse: bool):
+    """NumPy stand-in for `_qft_kernel` when numba is unavailable."""
+    num_targets = len(qubit_bits)
+    if num_targets == 0:
+        new_state[:] = state[:]
+        return
+
+    # Use dense matrix for small registers
+    if num_targets <= 10 and num_targets == state.shape[0].bit_length() - 1:
+        # Allocate output buffer
+        result = np.empty_like(state)
+        _qft_dense_apply(state, result, qubit_bits, inverse)
+        new_state[:] = result
+        return
+
+    # Fallback: use circuit approach (not implemented in numpy fallback)
+    raise NotImplementedError("Numba required for registers > 10 qubits")
+
+
+# ============================================================
+
 class Qubit:
     """A handle to one physical qubit. Holds an index, never any amplitudes."""
 
@@ -425,6 +625,7 @@ class QuantumComputer:
         self.op_hist: list[Gate] = []
         self._recording = True
         self._scratch: np.ndarray | None = None
+        self._custom_operators: dict[str, np.ndarray | Callable] = {}
 
         if qubit_names is None:
             self.qubits: list[Qubit] = [Qubit(self, i, f"q{i}") for i in range(num_qubits)]
@@ -435,6 +636,28 @@ class QuantumComputer:
                     f"the number of qubits ({self.num_qubits})."
                 )
             self.qubits = Qubit.from_list_str(self, qubit_names)
+
+    def register_operator(self, name: str, matrix: np.ndarray | Callable) -> None:
+        """Register a custom operator by name.
+
+        Args:
+            name: Name to reference the operator (e.g., "my_gate")
+            matrix: Unitary matrix (numpy array) or callable that returns a matrix
+                   Callable signature: callable(*params) -> np.ndarray
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("Operator name must be a non-empty string")
+        if name in self._custom_operators:
+            raise ValueError(f"Operator '{name}' already registered")
+        self._custom_operators[name] = matrix
+
+    def get_operator(self, name: str) -> np.ndarray | Callable | None:
+        """Retrieve a custom operator by name."""
+        return self._custom_operators.get(name)
+
+    def list_operators(self) -> list[str]:
+        """List all registered custom operator names."""
+        return list(self._custom_operators.keys())
 
     @property
     def dimension(self) -> int:
@@ -533,18 +756,91 @@ class QuantumComputer:
 
     def apply(
         self,
-        operation: np.ndarray | CompositeGate | CircuitGate | Gate | list[Gate],
+        operation: np.ndarray | CompositeGate | CircuitGate | Gate | list[Gate] | str,
         target_qubits: list[Qubit | int | str] | None = None,
         control_qubits: list[Qubit | int | str] | None = None,
     ):
-        """Apply a matrix, a gate record, a program, or a composite operation.
+        """Apply a matrix, a gate record, a program, a custom operator name, or a composite operation.
 
         All forms read the same way, so `qc.apply(gm.h_MAT, [0])`,
         `qc.apply(crk(3), [0], control_qubits=[1])` and
         `qc.apply(qft_gate(3), qc[0:3])` sit side by side. A program
         (`qc.apply([gate1, gate2, ...])`) picks its own qubits, so it takes no
         target operand; extra `control_qubits` condition every gate in it.
+
+        If `operation` is a string, it's looked up in the custom operator registry
+        (both instance and global registries).
         """
+        if isinstance(operation, str):
+            # Look up custom operator in instance registry first, then global
+            op, kind = get_global_operator(operation)
+            if op is None:
+                op = self.get_operator(operation)
+                kind = getattr(op, '_quantar_kind', 'matrix') if op else 'matrix'
+            else:
+                kind = kind or getattr(op, '_quantar_kind', 'matrix')
+            if op is None:
+                raise ValueError(f"Unknown operator: '{operation}'")
+            
+            if kind == "matrix":
+                if callable(op):
+                    matrix = op(self) if getattr(op, '_quantar_requires_instance', False) else op()
+                else:
+                    matrix = op
+                if not isinstance(matrix, np.ndarray):
+                    raise ValueError(f"Operator '{operation}' must return a numpy array")
+                if target_qubits is None:
+                    raise ValueError("Custom operator requires target qubits")
+                self.apply_gate(matrix, target_qubits, control_qubits, qasm_name=operation)
+                return
+            
+            elif kind == "unary":
+                if target_qubits is None or len(target_qubits) != 1:
+                    raise ValueError(f"Unary operator '{operation}' requires exactly one target qubit")
+                target = self.index_of(target_qubits[0])
+                if callable(op):
+                    if getattr(op, '_quantar_requires_instance', False):
+                        result = op(self, target)
+                    else:
+                        result = op(target)
+                return result
+            
+            elif kind == "binary":
+                if target_qubits is None or len(target_qubits) != 2:
+                    raise ValueError(f"Binary operator '{operation}' requires exactly two target qubits (control, target)")
+                control = self.index_of(target_qubits[0])
+                target = self.index_of(target_qubits[1])
+                if callable(op):
+                    if getattr(op, '_quantar_requires_instance', False):
+                        op(self, control, target)
+                    else:
+                        op(control, target)
+                return
+            
+            elif kind == "callable":
+                if target_qubits is None:
+                    raise ValueError("Callable operator requires target qubits")
+                targets = [self.index_of(q) for q in target_qubits]
+                controls = [self.index_of(q) for q in (control_qubits or [])]
+                if callable(op):
+                    if getattr(op, '_quantar_requires_instance', False):
+                        op(self, targets, controls)
+                    else:
+                        op(targets, controls)
+                return
+            
+            # Default: treat as matrix
+            if callable(op):
+                matrix = op(self) if getattr(op, '_quantar_requires_instance', False) else op()
+            else:
+                matrix = op
+            if not isinstance(matrix, np.ndarray):
+                raise ValueError(f"Operator '{operation}' must return a numpy array")
+            if target_qubits is None:
+                raise ValueError("Custom operator requires target qubits")
+            self.apply_gate(matrix, target_qubits, control_qubits, qasm_name=operation)
+            return
+
         if isinstance(operation, (list, tuple)):
             gates = list(operation)
             if target_qubits:
@@ -658,7 +954,7 @@ class QuantumComputer:
         flat = self.state_vector.reshape(-1)
         if self._scratch is None or self._scratch.shape != self.state_vector.shape:
             self._scratch = np.empty_like(self.state_vector)
-        out = self._scratch.reshape(-1)
+        out = self._scratch.reshape(-1) #type: ignore
 
         if HAVE_NUMBA:
             _swap_run_kernel(out, flat, pairs)
@@ -684,7 +980,7 @@ class QuantumComputer:
         flat = self.state_vector.reshape(-1)
         if self._scratch is None or self._scratch.shape != self.state_vector.shape:
             self._scratch = np.empty_like(self.state_vector)
-        out = self._scratch.reshape(-1)
+        out = self._scratch.reshape(-1) #type: ignore
 
         if HAVE_NUMBA:
             _fused_diagonal_kernel(out, flat, control_masks, target_bits, diag0, diag1)
@@ -758,6 +1054,122 @@ class QuantumComputer:
                 self.op_hist.append(inverse)
         finally:
             self._recording = was_recording
+
+    def qft(self, qubits: list[Qubit | int | str], *, inverse: bool = False,
+            record: bool | None = None) -> "QuantumComputer":
+        """Apply a Quantum Fourier Transform to the given qubits.
+
+        For registers ≤ 10 qubits, uses a dense matrix multiplication
+        (pre-computed QFT/IQFT matrix from gate_matrix) which is faster.
+        For larger registers, falls back to the optimized circuit approach
+        with fused diagonal runs.
+
+        Args:
+            qubits: The qubits to transform (MSB first).
+            inverse: If True, apply the inverse QFT (IQFT).
+            record: Whether to record in history (default: follows _recording).
+
+        Returns:
+            Self, for chaining.
+        """
+        targets = [self.index_of(q) for q in qubits]
+        if not targets:
+            return self
+
+        num_targets = len(targets)
+        if num_targets <= 10 and num_targets == self.num_qubits:
+            # Fast path: dense matrix multiplication (only when targets = all qubits)
+            qubit_bits = np.array([self.bit_position(t) for t in targets], dtype=np.int64)
+
+            if self._scratch is None or self._scratch.shape != self.state_vector.shape:
+                self._scratch = np.empty_like(self.state_vector)
+            out = self._scratch.reshape(-1)
+
+            _qft_dense_apply(self.state_vector.reshape(-1), out, qubit_bits, inverse)
+
+            previous_state = self.state_vector
+            self.state_vector = out.reshape(-1, 1)
+            self._scratch = previous_state
+        else:
+            # Larger register or partial register: fall back to optimized circuit approach
+            from stl.quantum_algs.shors_alg import qft_program, iqft_program
+            program = iqft_program(self, self.qubits[:num_targets]) if inverse else qft_program(self, self.qubits[:num_targets])
+            self.apply(program)
+
+        rec = self._recording if record is None else record
+        if rec:
+            self.op_hist.append(Gate(
+                np.eye(1, dtype=complex),  # placeholder
+                [], [],
+                name="iqft" if inverse else "qft",
+                params=[float(inverse)],
+            ))
+
+        return self
+
+    def iqft(self, qubits: list[Qubit | int | str], **kwargs) -> "QuantumComputer":
+        """Apply a fast Inverse Quantum Fourier Transform.
+
+        Equivalent to `qft(qubits, inverse=True)`.
+        """
+        return self.qft(qubits, inverse=True, **kwargs)
+
+    def measure_pauli(self, pauli: str, qubits: list[Qubit | int | str]) -> float:
+        """Measure the expectation value of a Pauli string in the Z basis.
+
+        Args:
+            pauli: Pauli string like 'X', 'Y', 'Z', 'XX', 'ZZ', 'XY', 'XYZ', etc.
+            qubits: List of qubits to measure (must match length of pauli string)
+
+        Returns:
+            Expectation value <psi|pauli|psi> as a float.
+        """
+        targets = [self.index_of(q) for q in qubits]
+        if len(targets) != len(pauli):
+            raise ValueError(f"Pauli string length ({len(pauli)}) must match number of qubits ({len(targets)})")
+
+        # Apply basis rotation before measurement
+        for idx, p in zip(targets, pauli):
+            if p == 'X':
+                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+            elif p == 'Y':
+                # Y basis: S† then H
+                self.apply_gate(gm.sdg_MAT, [self.qubits[idx]])
+                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+            elif p == 'Z':
+                pass  # Z basis is computational basis
+            elif p == 'I':
+                pass  # Identity - no rotation needed
+            else:
+                raise ValueError(f"Unknown Pauli operator: {p}")
+
+        # Measure all target qubits in Z basis
+        parity_values = []
+        for _ in range(1000):  # Fixed shots for now
+            # Simulate measurement by sampling from probability distribution
+            probs = np.abs(self.state_vector.flatten()) ** 2
+            probs /= probs.sum()
+            outcome = rnd.choice(self.dimension, p=probs)
+            
+            # Compute parity of measured bits
+            parity = 1.0
+            for idx in targets:
+                bit = (outcome >> (self.num_qubits - 1 - idx)) & 1
+                if bit == 1:
+                    parity *= -1
+            parity_values.append(parity)
+
+        # Clean up: apply inverse rotations to restore state
+        for idx, p in zip(targets, pauli):
+            if p == 'X':
+                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+            elif p == 'Y':
+                self.apply_gate(gm.s_MAT, [self.qubits[idx]])
+                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+            elif p in ('Z', 'I'):
+                pass
+
+        return float(np.mean(parity_values))
 
     def sample(self, circuit_func, num_samples: int = 1000) -> dict[str, int]:
         """Reset, run the circuit, and return bitstring -> count."""

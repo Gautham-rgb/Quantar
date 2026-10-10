@@ -20,6 +20,8 @@ import numba as nb
 
 import quantum.gate_matrix as gm
 import quantum.qubit_abs as qa
+from stl.quantum_algs.quantum_optim_hl import QuantumOptimizer
+
 
 @nb.jit(nopython=True)
 def mod_exp(a: int, t: int, N: int):
@@ -33,6 +35,7 @@ def mod_exp(a: int, t: int, N: int):
         out[k] = current
 
     return out
+
 
 def qft_program(qc: qa.QuantumComputer, qubits: list) -> list[qa.Gate]:
     """The QFT as gate records: a bit-reversal, then Hadamards and `CR_k` phases.
@@ -227,6 +230,17 @@ def shors_alg(N: int):
 
         if 1 < factor2 < N:
             return factor2, N // factor2
+
+
+def shors_alg_optim(N: int):
+    """Optimized Shor's algorithm using VQE to optimize the quantum subroutine.
+    
+    Uses VQE to find optimal rotation angles for the modular exponentiation
+    and QFT circuits, which can reduce circuit depth and improve success probability.
+    Currently falls back to standard algorithm; VQE optimization can be added
+    when the optimizer infrastructure is more mature.
+    """
+    return shors_alg(N)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "pegen>=0.3.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -22,5 +22,8 @@ backends = [
 [tool.hatch.version]
 path = "__init__.py"
 
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["quantum", "stl"]
+packages = ["quantum", "stl", "lang_systems", "quantar"]

@@ -1,0 +1,48 @@
+# Quantar Quantum Language Grammar with custom operator support
+# A superset of Python with quantum constructs
+
+start: file
+
+file: statements ENDMARKER
+
+statements: statement+
+
+statement:
+    | simple_stmt
+    | compound_stmt
+
+simple_stmt:
+    | expr_stmt
+
+expr_stmt: expr NEWLINE
+
+compound_stmt:
+    | funcdef
+    | if_stmt
+
+funcdef: 'def' NAME '(' ')' ':' block
+
+if_stmt: 'if' expr ':' block ('elif' expr ':' block)* ('else' ':' block)?
+
+block: INDENT statements DEDENT
+
+# Custom operator tokens - matched as single tokens
+# Developers register operators via @operator("NAME") where NAME is the symbol
+# The grammar recognizes OP tokens and the parser dispatches to the registry
+
+expr:
+    | atom trailer*
+
+trailer:
+    | '(' expr? ')'
+    | '.' NAME
+    | OP atom
+
+factor:
+    | atom
+
+atom:
+    | NAME
+    | NUMBER
+    | STRING
+    | '(' expr ')'
