@@ -8,6 +8,8 @@ __pycache__/
 
 #grammer
 Grammer/
+python.gram
+python_clean.gram
 
 # Distribution / packaging
 .Python

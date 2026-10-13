@@ -4,7 +4,7 @@ Generic operator registry and @operator decorator.
 Completely independent of quantum code - can be used for any purpose.
 """
 
-from typing import Callable, Any, Dict, List, Optional
+from typing import Callable, Any, Dict, List, Optional, Literal
 from functools import wraps
 import numpy as np
 
@@ -14,7 +14,7 @@ _global_operators: Dict[str, Callable] = {}
 _operator_metadata: Dict[str, Dict[str, Any]] = {}
 
 
-def operator(name: str, kind: str = "callable"):
+def operator(name: str, kind: Literal["binary", "unary", "matrix", "callable"]):
     """Decorator to register a custom operator with an arbitrary name.
 
     The name can be any string: capital letters, symbols, unicode, etc.
@@ -72,13 +72,13 @@ def operator(name: str, kind: str = "callable"):
             except TypeError as e:
                 if "missing 1 required positional argument: 'self'" in str(e):
                     # Instance method - wrap to be called with instance later
-                    def wrapper(instance):
+                    def wrapper_e(instance):
                         return func(instance)
-                    wrapper._operator_name = name
-                    wrapper._is_operator = True
-                    wrapper._requires_instance = True
-                    wrapper._kind = "matrix"
-                    _global_operators[name] = wrapper
+                    wrapper_e._operator_name = name
+                    wrapper_e._is_operator = True
+                    wrapper_e._requires_instance = True
+                    wrapper_e._kind = "matrix"
+                    _global_operators[name] = wrapper_e
                     _operator_metadata[name] = {"kind": "matrix", "requires_instance": True}
                     func._operator_name = name
                     func._is_operator = True
@@ -90,11 +90,13 @@ def operator(name: str, kind: str = "callable"):
             if not isinstance(matrix, np.ndarray):
                 raise ValueError(f"Operator function '{name}' must return a numpy array")
             
-            _global_operators[name] = matrix
+            # Store the function with metadata, not just the matrix
             func._operator_name = name
             func._is_operator = True
             func._requires_instance = False
             func._kind = "matrix"
+            func._operator_matrix = matrix  # Store the matrix as attribute
+            _global_operators[name] = func
             _operator_metadata[name] = {"kind": "matrix", "requires_instance": False}
             return func
         
@@ -114,10 +116,10 @@ def operator(name: str, kind: str = "callable"):
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
         
-        wrapper._operator_name = name
-        wrapper._is_operator = True
-        wrapper._requires_instance = func._requires_instance
-        wrapper._kind = kind
+        wrapper._operator_name = name #type: ignore
+        wrapper._is_operator = True #type: ignore
+        wrapper._requires_instance = func._requires_instance #type: ignore
+        wrapper._kind = kind #type: ignore
         
         return wrapper
     
@@ -164,7 +166,13 @@ def get_global_operator_matrix(name: str):
     """Retrieve a globally registered matrix operator by name."""
     op, kind = get_global_operator(name)
     if kind == 'matrix':
-        return op
+        op = _global_operators[name]
+        if callable(op):
+            try:
+                return op()
+            except TypeError:
+                # Instance method, can't call without instance
+                return op
     return None
 
 

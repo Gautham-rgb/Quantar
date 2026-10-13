@@ -7,8 +7,15 @@ import numpy as np
 from typing import Callable, Optional, List, Literal
 from dataclasses import dataclass
 
-from quantum.qubit_abs import QuantumComputer
 import numpy as np
+from quantum.qubit_abs import QuantumComputer
+from quantum.gate_matrix import rx_MAT, ry_MAT, rz_MAT, p_MAT, px_MAT
+from stl.quantum_algs.quantum_optim import (
+    hardware_efficient_ansatz, 
+    measure_pauli_expectation, 
+    Hamiltonian, 
+    Ansatz
+)
 
 
 @dataclass
@@ -39,12 +46,16 @@ class QuantumOptimizer:
         print(result.min_cost, result.optimal_params)
     """
     
-    def __init__(self, n_qubits: int, n_layers: int = 2, shots: int = 1000):
+    def __init__(
+        self, n_qubits: int, n_layers: int = 2, 
+        shots: int = 1000, hamiltonian: Optional['Hamiltonian'] = None
+    ):
         """
         Args:
             n_qubits: Number of qubits
             n_layers: Number of ansatz layers
             shots: Measurement shots for expectation
+            hamiltonian: Optional Hamiltonian for VQE
         """
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -55,11 +66,32 @@ class QuantumOptimizer:
         # Build default hardware-efficient ansatz
         from stl.quantum_algs.quantum_optim import hardware_efficient_ansatz
         self._ansatz = hardware_efficient_ansatz(n_qubits, n_layers, self._qc)
+        
+        # Optional Hamiltonian for VQE
+        self._hamiltonian = None
+    
+    def set_hamiltonian(self, hamiltonian):
+        """Set Hamiltonian for VQE."""
+        self._hamiltonian = hamiltonian
+    
+    def _build_energy_fn(self, cost_fn: Callable[[np.ndarray, 'QuantumComputer'], float]):
+        """Build energy function that constructs circuit and returns cost."""
+        def energy(params: np.ndarray) -> float:
+            qc = QuantumComputer(self.n_qubits)
+            self._ansatz.build_circuit(qc, params)
+            return cost_fn(params, qc)
+        return energy
     
     def minimize(
-        self, cost_fn: Callable[[np.ndarray, QuantumComputer], float], initial_params: Optional[np.ndarray] = None, 
-        optimizer: str = "gradient", max_iter: int = 100, lr: float = 0.1, 
-        callback: Optional[Callable[[int, float, np.ndarray], None]] = None) -> 'OptimizeResult':
+        self, 
+        cost_fn: Callable[[np.ndarray, 'QuantumComputer'], float], 
+        initial_params: Optional[np.ndarray] = None, 
+        optimizer: Literal["gradient", "spsa", "cobyla"] = "gradient", 
+        max_iter: int = 100, 
+        lr: float = 0.1, 
+        callback: Optional[Callable[[int, float, np.ndarray], None]] = None,
+        verbose: bool = True
+    ) -> 'OptimizeResult':
         """
         Minimize a cost function using quantum circuit.
         
@@ -76,22 +108,17 @@ class QuantumOptimizer:
         Returns:
             OptimizeResult with optimal_params, min_cost, history
         """
-        n_params = self._ansatz.n_params
-        
         if initial_params is None:
             initial_params = np.random.uniform(0, 2*np.pi, self._ansatz.n_params)
         
         params = initial_params.copy()
         history = []
         
-        def build_and_measure(params: np.ndarray) -> float:
+        def energy(params: np.ndarray) -> float:
             """Build circuit with params and return cost."""
             qc = QuantumComputer(self.n_qubits)
             self._ansatz.build_circuit(qc, params)
             return cost_fn(params, qc)
-        
-        def energy(params: np.ndarray) -> float:
-            return build_and_measure(params)
         
         history.append(energy(params))
         if callback:
@@ -99,7 +126,7 @@ class QuantumOptimizer:
         
         if optimizer == "gradient":
             for i in range(max_iter):
-                # Compute gradient via parameter shift
+                # Compute gradient via parameter shift rule
                 grad = np.zeros_like(params)
                 shift = np.pi / 2
                 for j in range(len(params)):
@@ -107,6 +134,10 @@ class QuantumOptimizer:
                     params_plus[j] += np.pi / 2
                     params_minus = params.copy()
                     params_minus[j] -= np.pi / 2
+                    
+                    # Parameter shift rule: gradient = 0.5 * (E(θ+π/2) - E(θ-π/2))
+                    e_plus = energy(params_plus)
+                    e_minus = energy(params_minus)
                     grad[j] = 0.5 * (energy(params_plus) - energy(params_minus))
                 
                 params -= lr * grad
@@ -117,36 +148,38 @@ class QuantumOptimizer:
                 if callback:
                     callback(i + 1, cost, params.copy())
                 
-                if i % 10 == 0:
+                if i % 10 == 0 and verbose:
                     print(f"  Iter {i}: cost = {cost:.6f}")
         
         elif optimizer == "spsa":
             # Simultaneous Perturbation Stochastic Approximation
-            # Only 2 function evaluations per iteration regardless of parameter count
-            a = 0.2
+            # Only needs 2 function evaluations per iteration regardless of parameter count
+            a = lr
             c = 0.1
             A = max_iter * 0.1
             alpha = 0.602
             gamma = 0.101
             
             for i in range(max_iter):
-                # Compute gain sequences
-                ak = 0.2 / (i + 1 + 0.1 * max_iter) ** 0.602
-                ck = 0.1 / (i + 1) ** 0.101
+                # Compute step sizes
+                ak = a / (i + 1 + A) ** alpha
+                ck = c / (i + 1) ** gamma
                 
-                # Generate random perturbation vector
+                # Random perturbation vector
                 delta = np.random.choice([-1, 1], size=len(params))
                 
                 params_plus = params + ck * delta
                 params_minus = params - ck * delta
                 
-                cost_plus = energy(params_plus)
-                cost_minus = energy(params_minus)
+                # Evaluate cost at perturbed points
+                e_plus = energy(params_plus)
+                e_minus = energy(params_minus)
                 
-                # SPSA gradient approximation
-                grad = (cost_plus - cost_minus) / (2 * ck) * delta
+                # Gradient approximation
+                grad = (e_plus - e_minus) / (2 * ck * delta)
                 
-                params -= lr * grad
+                # Update parameters
+                params -= ak * grad
                 
                 cost = energy(params)
                 history.append(cost)
@@ -154,43 +187,35 @@ class QuantumOptimizer:
                 if callback:
                     callback(i + 1, cost, params.copy())
                 
-                if i % 10 == 0:
+                if i % 5 == 0 and verbose:
                     print(f"  Iter {i}: cost = {cost:.6f}")
         
         elif optimizer == "cobyla":
-            # COBYLA using scipy's minimize
+            # Use SciPy's COBYLA if available
             try:
-                from scipy.optimize import minimize
+                from scipy.optimize import minimize as sp_minimize
+                result = sp_minimize(energy, params, method='COBYLA', 
+                                   options={'maxiter': max_iter, 'rhobeg': lr})
+                params = result.x
+                history.append(energy(params))
             except ImportError:
-                raise ImportError("COBYLA requires scipy. Install with: pip install scipy")
-            
-            # Use scipy's COBYLA optimizer
-            bounds = [(0, 2*np.pi)] * len(params)
-            
-            def cost_wrapper(params):
-                return energy(params)
-            
-            # COBYLA doesn't support bounds directly, but we can use constraints
-            # For now, just run without bounds and clip
-            result = minimize(
-                fun=cost_wrapper,
-                x0=params,
-                method='COBYLA',
-                options={'maxiter': max_iter, 'rhobeg': 0.1, 'rhoend': 1e-4},
-            )
-            
-            params = result.x
-            cost = result.fun
-            history.append(cost)
-            
-            if callback:
-                callback(max_iter, cost, params.copy())
-            
-            if not result.success:
-                print(f"Warning: COBYLA did not converge: {result.message}")
-        
-        else:
-            raise NotImplementedError(f"optimizer {optimizer} not implemented")
+                # Fallback to gradient
+                print("SciPy not available, falling back to gradient")
+                for i in range(max_iter):
+                    grad = np.zeros_like(params)
+                    for j in range(len(params)):
+                        params_plus = params.copy()
+                        params_plus[j] += np.pi / 2
+                        params_minus = params.copy()
+                        params_minus[j] -= np.pi / 2
+                        e_plus = energy(params_plus)
+                        e_minus = energy(params_minus)
+                        grad[j] = 0.5 * (e_plus - e_minus)
+                    params -= lr * grad
+                    cost = energy(params)
+                    history.append(cost)
+                    if callback:
+                        callback(i + 1, cost, params.copy())
         
         return OptimizeResult(
             optimal_params=params,
@@ -203,14 +228,13 @@ class QuantumOptimizer:
 
 
 def minimize_cost(
-    cost_fn: Callable[[np.ndarray, QuantumComputer], float],
+    cost_fn: Callable[[np.ndarray, 'QuantumComputer'], float],
     n_qubits: int,
     n_layers: int = 2,
     initial_params: Optional[np.ndarray] = None,
-    optimizer_type: Literal["cobyla", "spsa", "gradient"] = "gradient",
+    optimizer: Literal["cobyla", "spsa", "gradient"] = "gradient",
     max_iter: int = 100,
     lr: float = 0.1) -> 'OptimizeResult':
-    
     """
     One-liner to minimize a cost function.
     
@@ -226,8 +250,9 @@ def minimize_cost(
     Returns:
         OptimizeResult
     """
-    optimizer = QuantumOptimizer(n_qubits, n_layers)
-    return optimizer.minimize(cost_fn, initial_params, optimizer_type, max_iter, lr)
+    opt = QuantumOptimizer(n_qubits, n_layers)
+    return opt.minimize(cost_fn, initial_params, optimizer, max_iter, lr)
+
 
 class Penalty:
     """
@@ -260,7 +285,7 @@ class Penalty:
         self.weight = weight
         self.penalty_type = penalty_type
     
-    def evaluate(self, qc: QuantumComputer) -> float:
+    def evaluate(self, qc: 'QuantumComputer') -> float:
         """Evaluate penalty for current state."""
         value = self.measure_fn(qc)
         diff = value - self.target
@@ -277,14 +302,14 @@ class Penalty:
         else:
             raise ValueError(f"Unknown penalty type: {self.penalty_type}")
     
-    def __call__(self, qc: QuantumComputer) -> float:
+    def __call__(self, qc: 'QuantumComputer') -> float:
         return self.evaluate(qc)
 
 
 def penalized_cost(
-    objective_fn: Callable[[np.ndarray, QuantumComputer], float],
+    objective_fn: Callable[[np.ndarray, 'QuantumComputer'], float],
     penalties: List['Penalty'],
-) -> Callable[[np.ndarray, QuantumComputer], float]:
+) -> Callable[[np.ndarray, 'QuantumComputer'], float]:
     """
     Combine objective with penalties.
     
@@ -299,8 +324,6 @@ def penalized_cost(
         return cost
     return cost_fn
 
-
-# ─── Example usage ───
 
 if __name__ == "__main__":
     # Example: Minimize <Z0 Z1> + penalty for |00> population

@@ -5,65 +5,96 @@ written out as a readable OpenQASM 3 `gate` statement instead of a raw matrix.
 """
 
 import numpy as np
-
-h_MAT = np.array([[1, 1],
+from quantar.operators import operator
+@operator(kind = "matrix", name = "h")
+def h_MAT():
+    return np.array([[1, 1],
                   [1, -1]], dtype=complex) / np.sqrt(2)
 
-px_MAT = np.array([[0, 1],
-                   [1, 0]], dtype=complex)
+@operator(kind = "matrix", name = "~[x]")
+def px_MAT():
+    return np.array([[0, 1],
+                    [1, 0]], dtype=complex)
 
-py_MAT = np.array([[0, -1j],
-                   [1j, 0]], dtype=complex)
+@operator(kind = "matrix", name = "~[y]")
+def py_MAT():
+    return np.array([[0, -1j],
+                    [1j, 0]], dtype=complex)
 
-pz_MAT = np.array([[1, 0],
-                   [0, -1]], dtype=complex)
+@operator(kind = "matrix", name = "~[z]")
+def pz_MAT():
+    return np.array([[1, 0],
+                    [0, -1]], dtype=complex)
 
-i_MAT = np.eye(2, dtype=complex)
+@operator(kind = "matrix", name = "idm")
+def i_MAT():
+    return np.eye(2, dtype=complex)
 
-s_MAT = np.array([[1, 0],
-                  [0, 1j]], dtype=complex)
+@operator(kind = "matrix", name = "s")
+def s_MAT():
+    return np.array([[1, 0],
+                    [0, 1j]], dtype=complex)
 
-sdg_MAT = np.array([[1, 0],
-                    [0, -1j]], dtype=complex)
+@operator(kind = "matrix", name = "sdg")
+def sdg_MAT():
+    return np.array([[1, 0],
+                        [0, -1j]], dtype=complex)
 
-t_MAT = np.array([[1, 0],
-                  [0, np.exp(1j * np.pi / 4)]], dtype=complex)
+@operator(kind = "matrix", name = "t")
+def t_MAT():
+    return np.array([[1, 0],
+                    [0, np.exp(1j * np.pi / 4)]], dtype=complex)
 
-tdg_MAT = np.array([[1, 0],
-                    [0, np.exp(-1j * np.pi / 4)]], dtype=complex)
+@operator(kind = "matrix", name = "tdg")
+def tdg_MAT():
+    return np.array([[1, 0],
+                        [0, np.exp(-1j * np.pi / 4)]], dtype=complex)
 
-swap_MAT = np.array([[1, 0, 0, 0],
-                     [0, 0, 1, 0],
-                     [0, 1, 0, 0],
-                     [0, 0, 0, 1]], dtype=complex)
+@operator(kind = "matrix", name = "<->")
+def swap_MAT():
+    return np.array([[1, 0, 0, 0],
+                        [0, 0, 1, 0],
+                        [0, 1, 0, 0],
+                        [0, 0, 0, 1]], dtype=complex)
+@operator(kind = "matrix", name = "<-i->")
+def iswap_MAT():
+    return np.array([[1, 0,  0,  0],
+                        [0, 0, 1j, 0],
+                        [0, 1j,  0,  0],
+                        [0, 0,  0,  1]], dtype=complex)
+@operator(kind = "matrix", name = "<-s->")
+def swap_sqrt_MAT():
+    return np.array([[1, 0, 0, 0],
+                            [0, 0.5 + 0.5j, 0.5 - 0.5j, 0],
+                            [0, 0.5 - 0.5j, 0.5 + 0.5j, 0],
+                            [0, 0, 0, 1]], dtype=complex)
 
-iswap_MAT = np.array([[1, 0,  0,  0],
-                      [0, 0, 1j, 0],
-                      [0, 1j,  0,  0],
-                      [0, 0,  0,  1]], dtype=complex)
 
-swap_sqrt_MAT = np.array([[1, 0, 0, 0],
-                          [0, 0.5 + 0.5j, 0.5 - 0.5j, 0],
-                          [0, 0.5 - 0.5j, 0.5 + 0.5j, 0],
-                          [0, 0, 0, 1]], dtype=complex)
 
+# ─── Parameterized rotation gates (not registered as @operator matrix) ───
+# These are factory functions that return a matrix for a given angle.
+# They are NOT registered as operators because they require an angle parameter.
 
 def rx_MAT(angle: float) -> np.ndarray:
+    """RX rotation gate matrix."""
     c = np.cos(angle / 2)
     s = np.sin(angle / 2)
     return np.array([[c, -1j * s], [-1j * s, c]], dtype=complex)
 
 
 def ry_MAT(angle: float) -> np.ndarray:
+    """RY rotation gate matrix."""
     c = np.cos(angle / 2)
     s = np.sin(angle / 2)
     return np.array([[c, -s], [s, c]], dtype=complex)
 
 
 def rz_MAT(angle: float) -> np.ndarray:
-    c_minus = np.cos(angle / 2) - 1j * np.sin(angle / 2)
-    c_plus = np.cos(angle / 2) + 1j * np.sin(angle / 2)
-    return np.array([[c_minus, 0.0], [0.0, c_plus]], dtype=complex)
+    """RZ rotation gate matrix."""
+    c = np.cos(angle / 2)
+    s = np.sin(angle / 2)
+    return np.array([[np.cos(angle/2) - 1j*np.sin(angle/2), 0.0], 
+                     [0.0, np.cos(angle/2) + 1j*np.sin(angle/2)]], dtype=complex)
 
 
 def p_MAT(angle: float) -> np.ndarray:
@@ -74,7 +105,6 @@ def p_MAT(angle: float) -> np.ndarray:
     """
     return np.array([[1, 0], [0, np.exp(1j * angle)]], dtype=complex)
 
-
 def cp_MAT(angle: float) -> np.ndarray:
     """Controlled phase shift as a standalone 4x4 matrix: CR_k(control, target)."""
     phased = p_MAT(angle)
@@ -83,13 +113,10 @@ def cp_MAT(angle: float) -> np.ndarray:
                      [0, 0, 1, 0],
                      [0, 0, 0, phased[1, 1]]], dtype=complex)
 
-
 def rk_MAT(k: int) -> np.ndarray:
     e_exp = (np.pi * 1j) / (1 << k - 1)
     return np.array([[1, 0],
                      [0, np.e ** e_exp]])
-
-
 def qft_MAT(num_qubits: int) -> np.ndarray:
     N = 1 << num_qubits
     omega = np.exp(2j * np.pi / N)
@@ -110,16 +137,16 @@ def iqft_MAT(num_qubits: int) -> np.ndarray:
 # here also works under a `ctrl @` modifier, which is how multi-controlled
 # X and Z (Grover's oracle and diffuser) are written out.
 _BUILTIN_GATE_NAMES = [
-    ("h", h_MAT),
-    ("x", px_MAT),
-    ("y", py_MAT),
-    ("z", pz_MAT),
-    ("s", s_MAT),
-    ("sdg", sdg_MAT),
-    ("t", t_MAT),
-    ("tdg", tdg_MAT),
-    ("id", i_MAT),
-    ("swap", swap_MAT),
+    ("h", h_MAT()),
+    ("x", px_MAT()),
+    ("y", py_MAT()),
+    ("z", pz_MAT()),
+    ("s", s_MAT()),
+    ("sdg", sdg_MAT()),
+    ("t", t_MAT()),
+    ("tdg", tdg_MAT()),
+    ("id", i_MAT()),
+    ("swap", swap_MAT()),
 ]
 
 

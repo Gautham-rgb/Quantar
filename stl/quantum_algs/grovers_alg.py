@@ -38,11 +38,11 @@ def grover_oracle(qc: qa.QuantumComputer, data_qubits: list, ancilla_qubit: qa.Q
     if not data_qubits:
         return
 
-    qc.apply_gate(gm.px_MAT, [ancilla_qubit])
-    qc.apply_gate(gm.h_MAT, [ancilla_qubit])
+    qc.apply_gate(gm.px_MAT(), [ancilla_qubit])
+    qc.apply_gate(gm.h_MAT(), [ancilla_qubit])
     logic_func(qc, data_qubits, ancilla_qubit)
-    qc.apply_gate(gm.h_MAT, [ancilla_qubit])
-    qc.apply_gate(gm.px_MAT, [ancilla_qubit])
+    qc.apply_gate(gm.h_MAT(), [ancilla_qubit])
+    qc.apply_gate(gm.px_MAT(), [ancilla_qubit])
 
 
 def grover_diffuser(qc: qa.QuantumComputer, data_qubits: list):
@@ -51,17 +51,17 @@ def grover_diffuser(qc: qa.QuantumComputer, data_qubits: list):
         return
 
     for qubit in data_qubits:
-        qc.apply_gate(gm.h_MAT, [qubit])
-        qc.apply_gate(gm.px_MAT, [qubit])
+        qc.apply_gate(gm.h_MAT(), [qubit])
+        qc.apply_gate(gm.px_MAT(), [qubit])
 
     if len(data_qubits) > 1:
-        qc.apply_gate(gm.pz_MAT, [data_qubits[0]], control_qubits=data_qubits[1:])
+        qc.apply_gate(gm.pz_MAT(), [data_qubits[0]], control_qubits=data_qubits[1:])
     else:
-        qc.apply_gate(gm.pz_MAT, [data_qubits[0]])
+        qc.apply_gate(gm.pz_MAT(), [data_qubits[0]])
 
     for qubit in data_qubits:
-        qc.apply_gate(gm.px_MAT, [qubit])
-        qc.apply_gate(gm.h_MAT, [qubit])
+        qc.apply_gate(gm.px_MAT(), [qubit])
+        qc.apply_gate(gm.h_MAT(), [qubit])
 
 
 def grovers_alg(
@@ -86,7 +86,7 @@ def grovers_alg(
         raise ValueError("Grover's algorithm needs at least one data qubit (plus an ancilla).")
 
     for qubit in data_qubits:
-        qc.apply_gate(gm.h_MAT, [qubit])
+        qc.apply_gate(gm.h_MAT(), [qubit])
 
     iterations = optimal_iterations(2 ** len(data_qubits), num_targets)
     for _ in range(iterations):
@@ -99,7 +99,7 @@ def grovers_alg(
 def run_simulation(qc: qa.QuantumComputer):
     """Demo problem: mark the all-ones data register."""
     def mark_all_ones(qc: qa.QuantumComputer, data_qubits: list, ancilla_qubit: qa.Qubit):
-        qc.apply_gate(gm.px_MAT, [ancilla_qubit], control_qubits=data_qubits)
+        qc.apply_gate(gm.px_MAT(), [ancilla_qubit], control_qubits=data_qubits)
 
     grovers_alg(qc, mark_all_ones)
 

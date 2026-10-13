@@ -38,155 +38,11 @@ except Exception:
 
 from quantum.qasm import to_openqasm3
 import quantum.gate_matrix as gm
-# ─── Local operator registry (for @operator decorator) ───
-_global_operators: dict[str, Any] = {}
-_operator_metadata: dict[str, dict[str, Any]] = {}
-
 from quantar.operators import (
     get_global_operator, get_global_operator_matrix,
     get_operator_kind, get_operator_requires_instance,
     list_operators, apply_operator,
 )
-
-
-def operator(name: str, kind: str = "matrix"):
-    """Decorator to register a custom operator with an arbitrary name.
-
-    The name can be any string: capital letters, symbols, unicode, etc.
-    Works as a function decorator, method decorator, class decorator,
-    or with any Python/Quantar class.
-
-    Args:
-        name: Operator name (any string: "H", "X", "CNOT", "<->", "⟂", etc.)
-        kind: Operator kind - "matrix" (default, returns numpy array), 
-              "unary" (callable taking target), "binary" (callable taking control, target),
-              "callable" (generic callable, inspected at runtime)
-
-    Usage:
-        @operator("H")
-        def hadamard():
-            return gm.h_MAT
-
-        @operator("CNOT", kind="binary")
-        def cnot(self, control, target):
-            self.qc.apply_cnot(control, target)
-
-        @operator("H", kind="unary")
-        def hadamard(self, target):
-            self.qc.apply_h(target)
-
-        @operator("PRINT", kind="callable")
-        def print_state(qc):
-            print(qc.state)
-    """
-    def decorator(func: Callable):
-        if not isinstance(name, str) or not name:
-            raise ValueError("Operator name must be a non-empty string")
-        
-        if kind not in ("matrix", "unary", "binary", "callable"):
-            raise ValueError(f"Invalid kind: {kind}. Must be 'matrix', 'unary', 'binary', or 'callable'")
-        
-        # Handle different function types
-        if isinstance(func, (staticmethod, classmethod)):
-            func = func.__func__
-        
-        # For matrix kind, try to call to get matrix immediately
-        if kind == "matrix":
-            try:
-                matrix = func()
-            except TypeError as e:
-                if "missing 1 required positional argument: 'self'" in str(e):
-                    def wrapper(instance):
-                        return func(instance)
-                    wrapper._quantar_operator_name = name
-                    wrapper._quantar_is_operator = True
-                    wrapper._quantar_requires_instance = True
-                    wrapper._quantar_kind = "matrix"
-                    _global_operators[name] = wrapper
-                    func._quantar_operator_name = name
-                    func._quantar_is_operator = True
-                    func._quantar_requires_instance = True
-                    func._quantar_kind = "matrix"
-                    return func
-                raise
-            
-            if not isinstance(matrix, np.ndarray):
-                raise ValueError(f"Operator function '{name}' must return a numpy array")
-            
-            _global_operators[name] = matrix
-            func._quantar_operator_name = name
-            func._quantar_is_operator = True
-            func._quantar_requires_instance = False
-            func._quantar_kind = "matrix"
-            return func
-        
-        # For unary/binary/callable kinds, store the callable directly
-        # These will be called at execution time with appropriate arguments
-        func._quantar_operator_name = name
-        func._quantar_is_operator = True
-        func._quantar_requires_instance = "self" in func.__code__.co_varnames
-        func._quantar_kind = kind
-        
-        # For callable kind, we don't try to call it now
-        _global_operators[name] = func
-        
-        return func
-    
-    return decorator
-
-
-def get_global_operator(name: str):
-    """Retrieve a globally registered operator by name.
-    
-    Returns a tuple of (operator, kind) where kind is one of:
-    'matrix', 'unary', 'binary', 'callable', or None if not found.
-    """
-    op = _global_operators.get(name)
-    if op is None:
-        return None, None
-    kind = getattr(op, '_quantar_kind', 'matrix')
-    return op, kind
-
-
-def get_global_operator_matrix(name: str):
-    """Retrieve a globally registered matrix operator by name."""
-    op, kind = get_global_operator(name)
-    if kind == 'matrix':
-        return op
-    return None
-
-
-def list_global_operators() -> list[str]:
-    """List all globally registered operator names."""
-    return list(_global_operators.keys())
-
-
-def preprocess_quantar_source(source: str) -> str:
-    """Pre-process Quantar source to handle custom operators.
-    
-    Replaces registered custom operators with space-padded versions
-    so Python's tokenizer treats them as single OP tokens.
-    """
-    operators = sorted(list_global_operators(), key=len, reverse=True)
-    if not operators:
-        return source
-    
-    # Escape special regex chars and build pattern (longest first)
-    escaped = [re.escape(op) for op in operators]
-    pattern = '|'.join(escaped)
-    
-    def replace_op(match):
-        op = match.group(0)
-        # Replace with space-padded version so tokenizer sees it as single OP
-        return f' {op} '
-    
-    return re.sub(pattern, replace_op, source)
-
-
-def make_quantar_tokenizer(source: str):
-    """Create a tokenizer for Quantar source with custom operator support."""
-    processed = preprocess_quantar_source(source)
-    return tokenize.generate_tokens(io.StringIO(processed).readline)
 
 
 class Gate:
@@ -205,6 +61,11 @@ class Gate:
         self.name = name
         self.params = list(params) if params else []
         self.inverted = inverted
+
+# Verify unitarity (optional check)
+        if not np.allclose(self.matrix.conj().T @ self.matrix, np.eye(self.matrix.shape[0]), atol=1e-9):
+            deviation = self.matrix.conj().T @ self.matrix
+            raise ValueError(f"Gate matrix is not unitary (max deviation = {deviation})")
 
     def __repr__(self):
         label = self.name if self.name else f"{self.matrix.shape[0]}x{self.matrix.shape[1]} matrix"
@@ -379,6 +240,158 @@ def _apply_gate_kernel(state, new_state, matrix, target_mask: int,
                 new_state[basis | offsets[row]] = amplitude
 
 
+def _apply_gate_tensor(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
+                       target_bits: list[int], control_bits: list[int],
+                       out: np.ndarray | None = None) -> np.ndarray:
+    """Apply a gate using the optimized numba kernel.
+    
+    The tensor/einsum approach was slower for larger registers.
+    This uses the proven numba kernel which is fast for all sizes.
+    """
+    if state.size != 1 << num_qubits:
+        raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
+    
+    flat = state.reshape(-1)
+    if out is None:
+        new_state = np.empty_like(flat)
+    else:
+        new_state = out.reshape(-1)
+        if new_state.size != flat.size:
+            raise ValueError(f"`out` holds {new_state.size} amplitudes, expected {flat.size}.")
+        if np.shares_memory(new_state, flat):
+            raise ValueError("`out` must not overlap `state`; the gate needs both at once.")
+    
+    _apply_gate_kernel(
+        flat, new_state,
+        np.asarray(gate_matrix, dtype=complex).ravel(),
+        bit_mask(target_bits),
+        bit_mask(control_bits),
+        gate_offsets(target_bits),
+        1 << len(target_bits),
+    )
+    return new_state.reshape(-1, 1)
+
+
+def _apply_gate_tensor_einsum(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
+                              target_bits: list[int], control_bits: list[int],
+                              out: np.ndarray | None = None) -> np.ndarray:
+    """Apply a gate using tensor/einsum approach.
+    
+    Reshapes state into (2,)*num_qubits tensor and uses einsum to apply gate.
+    This is often faster for 1-2 qubit gates on small registers (≤12 qubits).
+    
+    Qubit convention: q0 is MSB, so bit position = num_qubits - 1 - qubit_index.
+    Tensor axes: axis 0 = q0 (MSB), axis -1 = q_{n-1} (LSB).
+    
+    Only works for num_qubits ≤ 26 (single-char subscript labels).
+    """
+    if state.size != 1 << num_qubits:
+        raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
+    
+    if num_qubits > 26:
+        # Fall back to kernel for >26 qubits (subscript label issues)
+        return _apply_gate_tensor(state, gate_matrix, num_qubits, target_bits, control_bits, out)
+    
+    # Reshape state to tensor: (2, 2, ..., 2) with num_qubits axes
+    # Axis i corresponds to qubit i (q0 is axis 0, MSB)
+    tensor = state.reshape((2,) * num_qubits)
+    
+    if out is None:
+        new_tensor = np.empty_like(tensor)
+    else:
+        new_tensor = out.reshape((2,) * num_qubits)
+        if new_tensor.size != tensor.size:
+            raise ValueError(f"`out` holds {new_tensor.size} amplitudes, expected {tensor.size}.")
+        if np.shares_memory(new_tensor, tensor):
+            raise ValueError("`out` must not overlap `state`; the gate needs both at once.")
+    
+    # Handle controls: mask out amplitudes where controls are not satisfied
+    if control_bits:
+        # Build control mask: for each control bit, we need that bit to be 1
+        control_mask = np.ones((2,) * num_qubits, dtype=bool)
+        for c_bit in control_bits:
+            axis = num_qubits - 1 - c_bit  # Convert bit position to tensor axis
+            # Create slice that selects only states where this bit is 1
+            sl = [slice(None)] * num_qubits
+            sl[axis] = 1
+            control_mask &= np.zeros((2,) * num_qubits, dtype=bool)
+            control_mask[tuple(sl)] = True
+        
+        # Copy non-controlled amplitudes to output
+        new_tensor[~control_mask] = tensor[~control_mask]
+        # Only apply gate to controlled subspace
+        tensor = tensor.copy()
+        tensor[~control_mask] = 0
+    else:
+        control_mask = np.ones((2,) * num_qubits, dtype=bool)
+    
+    # Convert target bits to tensor axes (q0=MSB=axis 0)
+    target_axes = [num_qubits - 1 - b for b in target_bits]
+    target_axes.sort()  # einsum needs axes in order
+    
+    # Build einsum string
+    # Input tensor indices: 'abcdef...' for all qubits
+    # Gate matrix indices: for 1-qubit: 'Yx' where x is the target axis (input), Y is output
+    #                      for 2-qubit: 'YxZy' where x,y are target axes (inputs), Y,Z are outputs
+    # Output tensor indices: same as input but with target axes replaced by output indices
+    all_axes = 'abcdefghijklmnopqrstuvwxyz'[:num_qubits]
+    in_indices = all_axes
+    
+    if len(target_axes) == 1:
+        # Single qubit gate: matrix is 2x2 (output, input)
+        t = target_axes[0]
+        target_idx = all_axes[t]
+        # Gate matrix: first index is output, second is input
+        # Contract input tensor's target axis with gate's input index
+        gate_idx = 'Y' + target_idx  # Y=output, target_idx=input (same letter to contract)
+        out_indices = all_axes[:t] + 'Y' + all_axes[t+1:]
+        einsum_str = f'{in_indices},{gate_idx}->{out_indices}'
+        # Ensure gate_matrix is 2D
+        gate_matrix = np.asarray(gate_matrix)
+        if gate_matrix.ndim > 2:
+            gate_matrix = gate_matrix.reshape(2, 2)
+        elif gate_matrix.shape != (2, 2):
+            gate_matrix = gate_matrix.reshape(2, 2)
+        # Apply gate using einsum
+        np.einsum(einsum_str, tensor, gate_matrix, out=new_tensor)
+    elif len(target_axes) == 2:
+        # Two qubit gate: matrix is 4x4 -> reshape to 2x2x2x2 (out1, out2, in1, in2)
+        t1, t2 = target_axes
+        idx1, idx2 = all_axes[t1], all_axes[t2]
+        # Gate tensor: reshape 4x4 to 2x2x2x2 with indices (out1, out2, in1, in2)
+        gate_tensor = gate_matrix.reshape(2, 2, 2, 2)
+        # Contract input axes with gate input indices
+        gate_idx = 'Y' + idx1 + 'Z' + idx2  # Y,Z=outputs, idx1,idx2=inputs
+        out_indices = list(all_axes)
+        out_indices[t1] = 'Y'
+        out_indices[t2] = 'Z'
+        out_indices = ''.join(out_indices)
+        einsum_str = f'{in_indices},{gate_idx}->{out_indices}'
+        np.einsum(einsum_str, tensor, gate_tensor, out=new_tensor)
+    else:
+        # Fallback to kernel for >2 qubits
+        flat = state.reshape(-1)
+        if out is None:
+            new_state = np.empty_like(flat)
+        else:
+            new_state = out.reshape(-1)
+        _apply_gate_kernel(
+            flat, new_state,
+            np.asarray(gate_matrix, dtype=complex).ravel(),
+            bit_mask(target_bits),
+            bit_mask(control_bits),
+            gate_offsets(target_bits),
+            1 << len(target_bits),
+        )
+        return new_state.reshape(-1, 1)
+    
+    # If there were controls, we need to add back the non-controlled amplitudes
+    if control_bits:
+        new_tensor[~control_mask] = state.reshape((2,) * num_qubits)[~control_mask]
+    
+    return new_tensor.reshape(-1, 1)
+
+
 def apply_local_gate(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
                      target_bits: list[int], control_bits: list[int],
                      out: np.ndarray | None = None) -> np.ndarray:
@@ -438,7 +451,7 @@ def _is_swap_local(gate: Gate) -> bool:
         len(gate.targets) == 2
         and not gate.controls
         and gate.matrix.shape == (4, 4)
-        and np.array_equal(gate.matrix, gm.swap_MAT)
+        and np.array_equal(gate.matrix, gm.swap_MAT())
     )
 
 
@@ -514,10 +527,6 @@ def _swap_run_numpy(new_state, state, pairs):
     new_state[:] = state[swapped]
 
 
-# ============================================================
-# Fast QFT/IQFT using dense matrices for small registers
-# ============================================================
-
 def _qft_dense_matrix(num_targets: int, inverse: bool = False) -> np.ndarray:
     """Return the dense QFT or IQFT matrix for the given number of targets."""
     from quantum.gate_matrix import qft_MAT, iqft_MAT
@@ -558,8 +567,6 @@ def _qft_numpy(state, new_state, qubit_bits: np.ndarray, inverse: bool):
     # Fallback: use circuit approach (not implemented in numpy fallback)
     raise NotImplementedError("Numba required for registers > 10 qubits")
 
-
-# ============================================================
 
 class Qubit:
     """A handle to one physical qubit. Holds an index, never any amplitudes."""
@@ -1005,10 +1012,17 @@ class QuantumComputer:
         # amplitudes are only ever written into a buffer that is already warm.
         previous_state = self.state_vector
         if len(target_bits) <= 2:
-            self.state_vector = apply_local_gate(
-                self.state_vector, gate.matrix, self.num_qubits, target_bits,
-                control_bits, out=self._scratch,
-            )
+            # Use tensor/einsum for small registers (≤12 qubits), kernel for larger
+            if self.num_qubits <= 12:
+                self.state_vector = _apply_gate_tensor_einsum(
+                    self.state_vector, gate.matrix, self.num_qubits, target_bits,
+                    control_bits, out=self._scratch,
+                )
+            else:
+                self.state_vector = _apply_gate_tensor(
+                    self.state_vector, gate.matrix, self.num_qubits, target_bits,
+                    control_bits, out=self._scratch,
+                )
         else:
             full_matrix = embedded_gate(gate.matrix, self.num_qubits, target_bits, control_bits)
             self.state_vector = np.matmul(full_matrix, self.state_vector, out=self._scratch)
@@ -1131,11 +1145,11 @@ class QuantumComputer:
         # Apply basis rotation before measurement
         for idx, p in zip(targets, pauli):
             if p == 'X':
-                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+                self.apply_gate(gm.h_MAT(), [self.qubits[idx]])
             elif p == 'Y':
                 # Y basis: S† then H
-                self.apply_gate(gm.sdg_MAT, [self.qubits[idx]])
-                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+                self.apply_gate(gm.sdg_MAT(), [self.qubits[idx]])
+                self.apply_gate(gm.h_MAT(), [self.qubits[idx]])
             elif p == 'Z':
                 pass  # Z basis is computational basis
             elif p == 'I':
@@ -1162,10 +1176,10 @@ class QuantumComputer:
         # Clean up: apply inverse rotations to restore state
         for idx, p in zip(targets, pauli):
             if p == 'X':
-                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+                self.apply_gate(gm.h_MAT(), [self.qubits[idx]])
             elif p == 'Y':
-                self.apply_gate(gm.s_MAT, [self.qubits[idx]])
-                self.apply_gate(gm.h_MAT, [self.qubits[idx]])
+                self.apply_gate(gm.s_MAT(), [self.qubits[idx]])
+                self.apply_gate(gm.h_MAT(), [self.qubits[idx]])
             elif p in ('Z', 'I'):
                 pass
 
