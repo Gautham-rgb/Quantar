@@ -65,11 +65,11 @@ def grover_diffuser(qc: qa.QuantumComputer, data_qubits: list):
 
 
 def grovers_alg(
-    qc: qa.QuantumComputer,
-    logic_func: Callable,
-    num_targets: int = 1,
-    scratch_qubits: list | None = None,
-) -> int:
+        qc: qa.QuantumComputer,
+        logic_func: Callable,
+        num_targets: int = 1,
+        scratch_qubits: list | None = None,
+    ) -> int:
     """Run Grover's algorithm and return the number of iterations used.
 
     The last qubit is the oracle ancilla. `scratch_qubits` are held out of the
@@ -96,7 +96,7 @@ def grovers_alg(
     return iterations
 
 
-def run_simulation(qc: qa.QuantumComputer):
+def demo(qc: qa.QuantumComputer):
     """Demo problem: mark the all-ones data register."""
     def mark_all_ones(qc: qa.QuantumComputer, data_qubits: list, ancilla_qubit: qa.Qubit):
         qc.apply_gate(gm.px_MAT(), [ancilla_qubit], control_qubits=data_qubits)
@@ -106,7 +106,7 @@ def run_simulation(qc: qa.QuantumComputer):
 
 if __name__ == "__main__":
     quantum_computer = qa.QuantumComputer(4)
-    counts = quantum_computer.sample(run_simulation, 1000)
+    counts = quantum_computer.sample(demo, 1000)
 
     results: dict[str, int] = {}
     for bits, count in counts.items():

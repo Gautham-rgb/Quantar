@@ -4,14 +4,14 @@ Generic operator registry and @operator decorator.
 Completely independent of quantum code - can be used for any purpose.
 """
 
-from typing import Callable, Any, Dict, List, Optional, Literal
+from typing import Callable, Any, Literal
 from functools import wraps
 import numpy as np
 
 
 # Global operator registry
-_global_operators: Dict[str, Callable] = {}
-_operator_metadata: Dict[str, Dict[str, Any]] = {}
+_global_operators: dict[str, Callable] = {}
+_operator_metadata: dict[str, dict[str, Any]] = {}
 
 
 def operator(name: str, kind: Literal["binary", "unary", "matrix", "callable"]):
@@ -28,27 +28,6 @@ def operator(name: str, kind: Literal["binary", "unary", "matrix", "callable"]):
               "binary" (callable taking two arguments),
               "callable" (generic callable, default)
 
-    Usage:
-        @operator("H")
-        def hadamard():
-            return np.array([[1, 1], [1, -1]]) / np.sqrt(2)
-
-        @operator("DOUBLE", kind="unary")
-        def double(x):
-            return x * 2
-
-        @operator("CONCAT", kind="binary")
-        def concat(a, b):
-            return str(a) + str(b)
-
-        @operator("PRINT", kind="callable")
-        def print_state(*args, **kwargs):
-            print(*args, **kwargs)
-
-        class MyClass:
-            @operator("MY_OP", kind="binary")
-            def my_op(self, a, b):
-                return a + b
     """
     if not isinstance(name, str) or not name:
         raise ValueError("Operator name must be a non-empty string")
@@ -128,8 +107,8 @@ def operator(name: str, kind: Literal["binary", "unary", "matrix", "callable"]):
 
 # ─── Public API ───
 
-_global_operators: Dict[str, Callable] = {}
-_operator_metadata: Dict[str, Dict[str, Any]] = {}
+_global_operators: dict[str, Callable] = {}
+_operator_metadata: dict[str, dict[str, Any]] = {}
 
 
 def get_global_operator(name: str):
@@ -150,7 +129,7 @@ def get_operator(name: str):
     return get_global_operator(name)
 
 
-def get_operator_kind(name: str) -> Optional[str]:
+def get_operator_kind(name: str) -> str | None:
     """Get the kind of a registered operator."""
     meta = _operator_metadata.get(name)
     return meta.get("kind") if meta else None
@@ -181,8 +160,8 @@ def get_operator_matrix(name: str):
     return get_global_operator_matrix(name)
 
 
-def list_operators() -> List[str]:
-    """List all globally registered operator names."""
+def list_operators() -> list[str]:
+    """list all globally registered operator names."""
     return list(_global_operators.keys())
 
 

@@ -335,11 +335,11 @@ if __name__ == "__main__":
     def objective(params, qc):
         qc.state_vector = np.zeros((4, 1), dtype=complex)
         qc.state_vector[0, 0] = 1.0
-        # Build ansatz manually for demo
-        qc.apply('H', [0])
-        qc.apply('RY', [0], params=[params[0]])  # Need RY gate
-        qc.apply('CNOT', [0, 1])
-        return qc.measure_pauli('ZZ', [0, 1])
+        # Build ansatz manually for demo: H, RY(theta), CNOT
+        qc.apply_gate(gm.h_MAT(), [qc[0]])
+        qc.apply_gate(gm.ry_MAT(params[0]), [qc[0]])
+        qc.apply_gate(gm.px_MAT(), [qc[0]], control_qubits=[qc[1]])
+        return qc.measure_pauli('ZZ', [qc[0], qc[1]])
     
     # Add penalty: discourage |00> state (penalty if <00|psi> > 0.1)
     penalty = Penalty(

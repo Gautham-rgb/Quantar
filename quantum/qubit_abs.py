@@ -21,552 +21,21 @@ from typing import overload
 import numpy as np
 import numpy.random as rnd
 from typing import Callable
-import re
-import tokenize
-import io
-from typing import Any
-try:
-    from numba import njit, prange
-    HAVE_NUMBA = True
-except Exception:
-    HAVE_NUMBA = False
-    def njit(*args, **kwargs):
-        def deco(f):
-            return f
-        return deco
-    prange = range
 
 from quantum.qasm import to_openqasm3
 import quantum.gate_matrix as gm
-from quantar.operators import (
-    get_global_operator, get_global_operator_matrix,
-    get_operator_kind, get_operator_requires_instance,
-    list_operators, apply_operator,
+from quantar.operators import get_global_operator
+
+from quantum.gate_abs import Gate, CompositeGate, CircuitGate
+
+from quantum.basic_funcs import (
+    bit_mask, embedded_gate, apply_local_gate, _is_diagonal_local, _is_swap_local,
+    _qft_dense_apply,
 )
-
-
-class Gate:
-    """One recorded gate application: a matrix plus the qubits it touches.
-
-    `inverted` marks a gate that was applied backwards (see `QuantumComputer.
-    uncompute`), so the OpenQASM 3 export can write it as `inv @ ...`.
-    """
-
-    def __init__(self, matrix, controls: list[int], targets: list[int],
-                 name: str | None = None, params: list[float] | None = None,
-                 inverted: bool = False):
-        self.matrix = np.asarray(matrix, dtype=complex)
-        self.controls = list(controls)
-        self.targets = list(targets)
-        self.name = name
-        self.params = list(params) if params else []
-        self.inverted = inverted
-
-# Verify unitarity (optional check)
-        if not np.allclose(self.matrix.conj().T @ self.matrix, np.eye(self.matrix.shape[0]), atol=1e-9):
-            deviation = self.matrix.conj().T @ self.matrix
-            raise ValueError(f"Gate matrix is not unitary (max deviation = {deviation})")
-
-    def __repr__(self):
-        label = self.name if self.name else f"{self.matrix.shape[0]}x{self.matrix.shape[1]} matrix"
-        direction = "inv @ " if self.inverted else ""
-        qubits = ", ".join([str(i) for i in self.controls + self.targets])
-        return f"<{direction}{label} on [{qubits}]>"
-
-    def inverse(self) -> "Gate":
-        """The same operation run backwards (the adjoint of a unitary)."""
-        return Gate(
-            self.matrix.conj().T,
-            self.controls,
-            self.targets,
-            self.name,
-            self.params,
-            not self.inverted,
-        )
-
-    def remap(self, mapping: list[int], extra_controls: list[int] = []) -> "Gate":
-        """The same gate with its qubits rewritten through `mapping`.
-
-        This is how a program built on one register is replayed onto another
-        (see `CircuitGate`); `extra_controls` are appended, which is how a
-        control on the outer gate conditions every gate inside it.
-        """
-        return Gate(
-            self.matrix,
-            [mapping[index] for index in self.controls] + list(extra_controls),
-            [mapping[index] for index in self.targets],
-            self.name,
-            self.params,
-            self.inverted,
-        )
-
-
-def bit_mask(positions) -> int:
-    """One integer whose set bits are exactly `positions` (1 << position each)."""
-    mask = 0
-    for position in positions:
-        mask |= 1 << position
-    return mask
-
-
-def gate_offsets(target_bits: list[int]) -> np.ndarray:
-    """The physical bit each value of the gate's own little index sets.
-
-    `target_bits[0]` is the gate matrix's most significant bit, so entry `v`
-    of the result is the basis offset of gate column/row `v`.
-    """
-    num_targets = len(target_bits)
-    offsets = np.zeros(1 << num_targets, dtype=np.int64)
-    for gate_bit, position in enumerate(target_bits):
-        gate_value = (np.arange(1 << num_targets, dtype=np.int64) >> (num_targets - 1 - gate_bit)) & 1
-        offsets |= gate_value << position
-    return offsets
-
-
-def embedded_gate(gate_matrix: np.ndarray, num_qubits: int,
-                  target_bits: list[int], control_bits: list[int]) -> np.ndarray:
-    """Expand a small gate into the full 2**num_qubits operator it acts as.
-
-    `target_bits` and `control_bits` are bit positions counted from the least
-    significant bit. The gate only touches basis states where every control is
-    1; every other basis state is left alone. Only used for 3+ target gates.
-    """
-    dimension = 1 << num_qubits
-    basis = np.arange(dimension, dtype=np.int64)
-    offsets = gate_offsets(target_bits)
-
-    # Basis states where all controls are 1 and all targets are 0.
-    control_mask = bit_mask(control_bits)
-    target_mask = bit_mask(target_bits)
-    usable = ((basis & control_mask) == control_mask) & ((basis & target_mask) == 0)
-    anchors = basis[usable]
-
-    full_matrix = np.eye(dimension, dtype=complex)
-    for row in range(len(offsets)):
-        for column in range(len(offsets)):
-            full_matrix[anchors + offsets[row], anchors + offsets[column]] = gate_matrix[row, column]
-
-    return full_matrix
-
-
-class CompositeGate:
-    """A gate built from other operations rather than from one matrix.
-
-    `body(qc, targets, controls)` applies whatever gates it needs; `name` and
-    `params` describe it for OpenQASM 3 (its inner `apply_gate` calls are what
-    actually end up in `op_hist`).
-    """
-
-    def __init__(self, name: str, body, params: list[float] | None = None):
-        self.name = name
-        self.body = body
-        self.params = list(params) if params else []
-
-    def __repr__(self):
-        return f"<composite {self.name}>"
-
-    def __call__(self, qc: "QuantumComputer", targets: list[int], controls: list[int]):
-        self.body(qc, targets, controls)
-
-
-class CircuitGate:
-    """A whole circuit usable as one gate: a program built on its own register.
-
-    `CircuitGate.build(name, width, builder)` runs `builder(qc, qubits)` on a
-    scratch register of `width` qubits and keeps whatever it recorded. Applying
-    the result replays that program onto the parent's target qubits, so
-    `qc.apply(qft_gate(4), qc[0:4])` works exactly like running the QFT circuit
-    by hand -- and `op_hist` still holds the individual gates, so `uncompute`
-    and `to_openqasm3` see the real operations rather than an opaque block.
-    """
-
-    def __init__(self, name: str, width: int, program: list[Gate],
-                 params: list[float] | None = None):
-        self.name = name
-        self.width = width
-        self.program = list(program)
-        self.params = list(params) if params else []
-
-    def __repr__(self):
-        return f"<circuit {self.name}: {len(self.program)} gate(s) on {self.width} qubit(s)>"
-
-    @classmethod
-    def build(cls, name: str, width: int, builder, params: list[float] | None = None) -> "CircuitGate":
-        """Record `builder(qc, qubits)` on a scratch register and keep the program."""
-        scratch = QuantumComputer(width, name=name)
-        builder(scratch, scratch.qubits)
-        return cls(name, width, scratch.op_hist, params)
-
-    def inverse(self) -> "CircuitGate":
-        """The same circuit backwards: every gate inverted, in reverse order."""
-        return CircuitGate(
-            self.name,
-            self.width,
-            [gate.inverse() for gate in reversed(self.program)],
-            self.params,
-        )
-
-    def __call__(self, qc: "QuantumComputer", targets: list[int], controls: list[int]):
-        targets = [qc.index_of(target) for target in targets]
-        if len(targets) != self.width:
-            raise ValueError(
-                f"'{self.name}' acts on {self.width} qubit(s), got {len(targets)} target(s)."
-            )
-        extra = [qc.index_of(control) for control in controls]
-        qc._apply_program([gate.remap(targets, extra) for gate in self.program])
-
-
-@njit(parallel=True)
-def _apply_gate_kernel(state, new_state, matrix, target_mask: int,
-                       control_mask: int, offsets, num_values: int):
-    """Read every amplitude once, write every amplitude once.
-
-    `state` and `new_state` are the same length; `matrix` is the gate acting on
-    the targets, laid out row-major over `num_values` = 2**targets entries.
-
-    Basis states are split three ways: those failing a control are copied
-    through, those setting a target bit are left for their anchor (the same
-    state with the target bits cleared, which owns the whole block), and the
-    anchors read their block, multiply it by the gate, and write it back.
-    """
-    for basis in prange(state.shape[0]):
-        if (basis & control_mask) != control_mask:
-            new_state[basis] = state[basis]
-        elif (basis & target_mask) == 0:
-            for row in range(num_values):
-                amplitude = matrix[row * num_values] * state[basis | offsets[0]]
-                for column in range(1, num_values):
-                    amplitude += matrix[row * num_values + column] * state[basis | offsets[column]]
-                new_state[basis | offsets[row]] = amplitude
-
-
-def _apply_gate_tensor(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
-                       target_bits: list[int], control_bits: list[int],
-                       out: np.ndarray | None = None) -> np.ndarray:
-    """Apply a gate using the optimized numba kernel.
-    
-    The tensor/einsum approach was slower for larger registers.
-    This uses the proven numba kernel which is fast for all sizes.
-    """
-    if state.size != 1 << num_qubits:
-        raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
-    
-    flat = state.reshape(-1)
-    if out is None:
-        new_state = np.empty_like(flat)
-    else:
-        new_state = out.reshape(-1)
-        if new_state.size != flat.size:
-            raise ValueError(f"`out` holds {new_state.size} amplitudes, expected {flat.size}.")
-        if np.shares_memory(new_state, flat):
-            raise ValueError("`out` must not overlap `state`; the gate needs both at once.")
-    
-    _apply_gate_kernel(
-        flat, new_state,
-        np.asarray(gate_matrix, dtype=complex).ravel(),
-        bit_mask(target_bits),
-        bit_mask(control_bits),
-        gate_offsets(target_bits),
-        1 << len(target_bits),
-    )
-    return new_state.reshape(-1, 1)
-
-
-def _apply_gate_tensor_einsum(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
-                              target_bits: list[int], control_bits: list[int],
-                              out: np.ndarray | None = None) -> np.ndarray:
-    """Apply a gate using tensor/einsum approach.
-    
-    Reshapes state into (2,)*num_qubits tensor and uses einsum to apply gate.
-    This is often faster for 1-2 qubit gates on small registers (≤12 qubits).
-    
-    Qubit convention: q0 is MSB, so bit position = num_qubits - 1 - qubit_index.
-    Tensor axes: axis 0 = q0 (MSB), axis -1 = q_{n-1} (LSB).
-    
-    Only works for num_qubits ≤ 26 (single-char subscript labels).
-    """
-    if state.size != 1 << num_qubits:
-        raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
-    
-    if num_qubits > 26:
-        # Fall back to kernel for >26 qubits (subscript label issues)
-        return _apply_gate_tensor(state, gate_matrix, num_qubits, target_bits, control_bits, out)
-    
-    # Reshape state to tensor: (2, 2, ..., 2) with num_qubits axes
-    # Axis i corresponds to qubit i (q0 is axis 0, MSB)
-    tensor = state.reshape((2,) * num_qubits)
-    
-    if out is None:
-        new_tensor = np.empty_like(tensor)
-    else:
-        new_tensor = out.reshape((2,) * num_qubits)
-        if new_tensor.size != tensor.size:
-            raise ValueError(f"`out` holds {new_tensor.size} amplitudes, expected {tensor.size}.")
-        if np.shares_memory(new_tensor, tensor):
-            raise ValueError("`out` must not overlap `state`; the gate needs both at once.")
-    
-    # Handle controls: mask out amplitudes where controls are not satisfied
-    if control_bits:
-        # Build control mask: for each control bit, we need that bit to be 1
-        control_mask = np.ones((2,) * num_qubits, dtype=bool)
-        for c_bit in control_bits:
-            axis = num_qubits - 1 - c_bit  # Convert bit position to tensor axis
-            # Create slice that selects only states where this bit is 1
-            sl = [slice(None)] * num_qubits
-            sl[axis] = 1
-            control_mask &= np.zeros((2,) * num_qubits, dtype=bool)
-            control_mask[tuple(sl)] = True
-        
-        # Copy non-controlled amplitudes to output
-        new_tensor[~control_mask] = tensor[~control_mask]
-        # Only apply gate to controlled subspace
-        tensor = tensor.copy()
-        tensor[~control_mask] = 0
-    else:
-        control_mask = np.ones((2,) * num_qubits, dtype=bool)
-    
-    # Convert target bits to tensor axes (q0=MSB=axis 0)
-    target_axes = [num_qubits - 1 - b for b in target_bits]
-    target_axes.sort()  # einsum needs axes in order
-    
-    # Build einsum string
-    # Input tensor indices: 'abcdef...' for all qubits
-    # Gate matrix indices: for 1-qubit: 'Yx' where x is the target axis (input), Y is output
-    #                      for 2-qubit: 'YxZy' where x,y are target axes (inputs), Y,Z are outputs
-    # Output tensor indices: same as input but with target axes replaced by output indices
-    all_axes = 'abcdefghijklmnopqrstuvwxyz'[:num_qubits]
-    in_indices = all_axes
-    
-    if len(target_axes) == 1:
-        # Single qubit gate: matrix is 2x2 (output, input)
-        t = target_axes[0]
-        target_idx = all_axes[t]
-        # Gate matrix: first index is output, second is input
-        # Contract input tensor's target axis with gate's input index
-        gate_idx = 'Y' + target_idx  # Y=output, target_idx=input (same letter to contract)
-        out_indices = all_axes[:t] + 'Y' + all_axes[t+1:]
-        einsum_str = f'{in_indices},{gate_idx}->{out_indices}'
-        # Ensure gate_matrix is 2D
-        gate_matrix = np.asarray(gate_matrix)
-        if gate_matrix.ndim > 2:
-            gate_matrix = gate_matrix.reshape(2, 2)
-        elif gate_matrix.shape != (2, 2):
-            gate_matrix = gate_matrix.reshape(2, 2)
-        # Apply gate using einsum
-        np.einsum(einsum_str, tensor, gate_matrix, out=new_tensor)
-    elif len(target_axes) == 2:
-        # Two qubit gate: matrix is 4x4 -> reshape to 2x2x2x2 (out1, out2, in1, in2)
-        t1, t2 = target_axes
-        idx1, idx2 = all_axes[t1], all_axes[t2]
-        # Gate tensor: reshape 4x4 to 2x2x2x2 with indices (out1, out2, in1, in2)
-        gate_tensor = gate_matrix.reshape(2, 2, 2, 2)
-        # Contract input axes with gate input indices
-        gate_idx = 'Y' + idx1 + 'Z' + idx2  # Y,Z=outputs, idx1,idx2=inputs
-        out_indices = list(all_axes)
-        out_indices[t1] = 'Y'
-        out_indices[t2] = 'Z'
-        out_indices = ''.join(out_indices)
-        einsum_str = f'{in_indices},{gate_idx}->{out_indices}'
-        np.einsum(einsum_str, tensor, gate_tensor, out=new_tensor)
-    else:
-        # Fallback to kernel for >2 qubits
-        flat = state.reshape(-1)
-        if out is None:
-            new_state = np.empty_like(flat)
-        else:
-            new_state = out.reshape(-1)
-        _apply_gate_kernel(
-            flat, new_state,
-            np.asarray(gate_matrix, dtype=complex).ravel(),
-            bit_mask(target_bits),
-            bit_mask(control_bits),
-            gate_offsets(target_bits),
-            1 << len(target_bits),
-        )
-        return new_state.reshape(-1, 1)
-    
-    # If there were controls, we need to add back the non-controlled amplitudes
-    if control_bits:
-        new_tensor[~control_mask] = state.reshape((2,) * num_qubits)[~control_mask]
-    
-    return new_tensor.reshape(-1, 1)
-
-
-def apply_local_gate(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
-                     target_bits: list[int], control_bits: list[int],
-                     out: np.ndarray | None = None) -> np.ndarray:
-    """Apply a gate to one or two targets without building a 2**n matrix.
-
-    As everywhere else in the simulator, `gate_matrix` acts on the targets
-    only and the controls say where that action is conditional. `num_qubits`
-    describes the register `state` belongs to.
-
-    The work is a single fused pass over the amplitudes, done in parallel by
-    `_apply_gate_kernel`, so cost is O(2**num_qubits) instead of the
-    O(4**num_qubits) of `embedded_gate` -- which is what makes wide registers
-    like Shor's practical at all.
-
-    `state` is never written to. Pass `out=` to choose where the result lands;
-    reusing one buffer across gates is what keeps the cost near a plain copy,
-    since a fresh 32 MB array would fault in new pages every gate.
-    """
-    if state.size != 1 << num_qubits:
-        raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
-
-    flat = state.reshape(-1)
-    if out is None:
-        new_state = np.empty_like(flat)
-    else:
-        new_state = out.reshape(-1)
-        if new_state.size != flat.size:
-            raise ValueError(f"`out` holds {new_state.size} amplitudes, expected {flat.size}.")
-        if np.shares_memory(new_state, flat):
-            raise ValueError("`out` must not overlap `state`; the gate needs both at once.")
-
-    _apply_gate_kernel(
-        flat,
-        new_state,
-        np.asarray(gate_matrix, dtype=complex).ravel(),
-        bit_mask(target_bits),
-        bit_mask(control_bits),
-        gate_offsets(target_bits),
-        1 << len(target_bits),
-    )
-    return new_state.reshape(-1, 1)
-
-
-def _is_diagonal_local(gate: Gate) -> bool:
-    """True for a single-target gate with nothing off the diagonal (a phase)."""
-    return (
-        len(gate.targets) == 1
-        and gate.matrix.shape == (2, 2)
-        and gate.matrix[0, 1] == 0
-        and gate.matrix[1, 0] == 0
-    )
-
-
-def _is_swap_local(gate: Gate) -> bool:
-    """True for a plain SWAP: two targets, no controls, the swap matrix."""
-    return (
-        len(gate.targets) == 2
-        and not gate.controls
-        and gate.matrix.shape == (4, 4)
-        and np.array_equal(gate.matrix, gm.swap_MAT())
-    )
-
-
-@njit(parallel=True)
-def _fused_diagonal_kernel(new_state, state, control_masks, target_bits, diag0, diag1):
-    """Apply a whole run of diagonal single-target gates in one pass.
-
-    Each gate is `diag(a, b)` on its own target with its own controls, so the
-    combined action on a basis state is one complex product computed inline.
-    Fusing a run this way replaces one read+write of the state per gate with a
-    single pass per run, which is what makes the QFT's t(t+1)/2 controlled
-    phases cost t passes instead of t(t+1)/2.
-    """
-    num_gates = control_masks.shape[0]
-    for basis in prange(state.shape[0]):
-        value = 1.0 + 0.0j
-        for gate_index in range(num_gates):
-            if (basis & control_masks[gate_index]) == control_masks[gate_index]:
-                if (basis >> target_bits[gate_index]) & 1:
-                    value *= diag1[gate_index]
-                else:
-                    value *= diag0[gate_index]
-        new_state[basis] = state[basis] * value
-
-
-def _fused_diagonal_numpy(new_state, state, control_masks, target_bits, diag0, diag1):
-    """NumPy stand-in for `_fused_diagonal_kernel` when numba is unavailable."""
-    basis = np.arange(state.shape[0], dtype=np.int64)
-    value = np.ones(state.shape[0], dtype=complex)
-    for gate_index in range(len(control_masks)):
-        allowed = (basis & control_masks[gate_index]) == control_masks[gate_index]
-        bit = (basis >> target_bits[gate_index]) & 1
-        value *= np.where(
-            allowed,
-            np.where(bit == 1, diag1[gate_index], diag0[gate_index]),
-            1.0 + 0.0j,
-        )
-    new_state[:] = state * value
-
-
-@njit(parallel=True)
-def _swap_run_kernel(new_state, state, pairs):
-    """Apply a run of disjoint SWAPs as one permutation pass over the state.
-
-    `pairs` holds the two bit positions each swap exchanges. Disjoint swaps
-    compose into a single involution, so every amplitude moves exactly once:
-    this is the whole bit-reversal layer of a QFT in one read + one write
-    instead of n/2 gate applications.
-    """
-    num_pairs = pairs.shape[0]
-    for basis in prange(state.shape[0]):
-        # numba's parfor pass mis-infers the prange index as float64 once it
-        # is carried through a loop-reassigned alias; the cast keeps it int.
-        swapped = np.int64(basis)
-        for pair_index in range(num_pairs):
-            low = pairs[pair_index, 0]
-            high = pairs[pair_index, 1]
-            bit_low = (swapped >> low) & 1
-            bit_high = (swapped >> high) & 1
-            swapped = (swapped & ~(1 << low) & ~(1 << high)) | (bit_low << high) | (bit_high << low)
-        new_state[basis] = state[swapped]
-
-
-def _swap_run_numpy(new_state, state, pairs):
-    """NumPy stand-in for `_swap_run_kernel` when numba is unavailable."""
-    swapped = np.arange(state.shape[0], dtype=np.int64)
-    for pair_index in range(pairs.shape[0]):
-        low = pairs[pair_index, 0]
-        high = pairs[pair_index, 1]
-        bit_low = (swapped >> low) & 1
-        bit_high = (swapped >> high) & 1
-        swapped = (swapped & ~(1 << low) & ~(1 << high)) | (bit_low << high) | (bit_high << low)
-    new_state[:] = state[swapped]
-
-
-def _qft_dense_matrix(num_targets: int, inverse: bool = False) -> np.ndarray:
-    """Return the dense QFT or IQFT matrix for the given number of targets."""
-    from quantum.gate_matrix import qft_MAT, iqft_MAT
-    return iqft_MAT(num_targets) if inverse else qft_MAT(num_targets)
-
-
-def _qft_dense_apply(state, out, qubit_bits: np.ndarray, inverse: bool):
-    """Apply QFT/IQFT using dense matrix multiplication for small registers.
-    
-    Assumes the target qubits are the entire register (no spectators).
-    """
-    num_targets = len(qubit_bits)
-    if num_targets == 0:
-        return
-
-    # Get dense matrix
-    matrix = _qft_dense_matrix(len(qubit_bits), inverse=inverse)
-
-    # Apply matrix to the state vector
-    out[:] = (matrix @ state.reshape(-1, 1)).flatten()
-
-
-def _qft_numpy(state, new_state, qubit_bits: np.ndarray, inverse: bool):
-    """NumPy stand-in for `_qft_kernel` when numba is unavailable."""
-    num_targets = len(qubit_bits)
-    if num_targets == 0:
-        new_state[:] = state[:]
-        return
-
-    # Use dense matrix for small registers
-    if num_targets <= 10 and num_targets == state.shape[0].bit_length() - 1:
-        # Allocate output buffer
-        result = np.empty_like(state)
-        _qft_dense_apply(state, result, qubit_bits, inverse)
-        new_state[:] = result
-        return
-
-    # Fallback: use circuit approach (not implemented in numpy fallback)
-    raise NotImplementedError("Numba required for registers > 10 qubits")
-
+from quantum.kernels import (
+    HAVE_NUMBA, fused_diagonal_kernel, fused_diagonal_numpy,
+    swap_run_kernel, swap_run_numpy, sample_counts,
+)
 
 class Qubit:
     """A handle to one physical qubit. Holds an index, never any amplitudes."""
@@ -964,9 +433,9 @@ class QuantumComputer:
         out = self._scratch.reshape(-1) #type: ignore
 
         if HAVE_NUMBA:
-            _swap_run_kernel(out, flat, pairs)
+            swap_run_kernel(out, flat, pairs)
         else:
-            _swap_run_numpy(out, flat, pairs)
+            swap_run_numpy(out, flat, pairs)
 
         previous_state = self.state_vector
         self.state_vector = out.reshape(-1, 1)
@@ -990,9 +459,9 @@ class QuantumComputer:
         out = self._scratch.reshape(-1) #type: ignore
 
         if HAVE_NUMBA:
-            _fused_diagonal_kernel(out, flat, control_masks, target_bits, diag0, diag1)
+            fused_diagonal_kernel(out, flat, control_masks, target_bits, diag0, diag1)
         else:
-            _fused_diagonal_numpy(out, flat, control_masks, target_bits, diag0, diag1)
+            fused_diagonal_numpy(out, flat, control_masks, target_bits, diag0, diag1)
 
         previous_state = self.state_vector
         self.state_vector = out.reshape(-1, 1)
@@ -1012,17 +481,12 @@ class QuantumComputer:
         # amplitudes are only ever written into a buffer that is already warm.
         previous_state = self.state_vector
         if len(target_bits) <= 2:
-            # Use tensor/einsum for small registers (≤12 qubits), kernel for larger
-            if self.num_qubits <= 12:
-                self.state_vector = _apply_gate_tensor_einsum(
-                    self.state_vector, gate.matrix, self.num_qubits, target_bits,
-                    control_bits, out=self._scratch,
-                )
-            else:
-                self.state_vector = _apply_gate_tensor(
-                    self.state_vector, gate.matrix, self.num_qubits, target_bits,
-                    control_bits, out=self._scratch,
-                )
+            # One fused kernel pass over the amplitudes; the kernel is correct
+            # for every register size and beats the einsum path in practice.
+            self.state_vector = apply_local_gate(
+                self.state_vector, gate.matrix, self.num_qubits, target_bits,
+                control_bits, out=self._scratch,
+            )
         else:
             full_matrix = embedded_gate(gate.matrix, self.num_qubits, target_bits, control_bits)
             self.state_vector = np.matmul(full_matrix, self.state_vector, out=self._scratch)
@@ -1199,15 +663,36 @@ class QuantumComputer:
 
         circuit_func(self)
 
-        probabilities = np.abs(self.state_vector.flatten()) ** 2
+        probabilities = np.abs(self.state_vector.ravel()) ** 2
         total = probabilities.sum()
         if total > 0:
             probabilities /= total
 
-        draws = rnd.choice(self.dimension, size=num_samples, p=probabilities)
-        counts = np.bincount(draws, minlength=self.dimension)
+        counts = sample_counts(probabilities, num_samples, self.dimension)
 
         return {f"{i:0{self.num_qubits}b}": int(count) for i, count in enumerate(counts) if count}
+
+    def sample_parallel(self, circuit_func: Callable, num_samples: int = 1000, **circuit_func_kwargs):
+        """Reset the computer and sample measurement outcomes in parallel."""
+        if num_samples <= 0:
+            raise ValueError("Number of samples must be a positive integer.")
+
+        self.state_vector = np.zeros((self.dimension, 1), dtype=complex)
+        self.state_vector[0, 0] = 1.0
+        self.op_hist = []
+        for qubit in self.qubits:
+            qubit.is_measured = False
+            qubit._true_val = None
+
+        circuit_func(self, **circuit_func_kwargs)
+        probabilities = np.abs(self.state_vector.ravel()) ** 2
+        total = probabilities.sum()
+        if total > 0:
+            probabilities /= total
+
+        counts = sample_counts(probabilities, num_samples, self.dimension)
+        return {f"{i:0{self.num_qubits}b}": int(count) for i, count in enumerate(counts) if count}
+
 
     def to_openqasm3(self) -> str:
         """Render the recorded history as an OpenQASM 3 program."""

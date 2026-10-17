@@ -346,6 +346,6 @@ def shors_alg_optim(N: int):
 if __name__ == "__main__":
     import time
     t0 = time.time()
-    print(shors_alg(323))
+    print(shors_alg(21))
     t1 = time.time()
     print(f"time taken: {t1 - t0}s")

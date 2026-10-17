@@ -7,7 +7,7 @@ expand gate by gate — the QFT is `h` plus `crk` pairs, for instance.
 import numpy as np
 
 import quantum.gate_matrix as gm
-from quantum.qubit_abs import CompositeGate
+from quantum.gate_abs import CompositeGate
 
 
 def crk(k: int, inverse: bool = False) -> CompositeGate:

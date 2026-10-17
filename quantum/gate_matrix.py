@@ -117,6 +117,7 @@ def rk_MAT(k: int) -> np.ndarray:
     e_exp = (np.pi * 1j) / (1 << k - 1)
     return np.array([[1, 0],
                      [0, np.e ** e_exp]])
+
 def qft_MAT(num_qubits: int) -> np.ndarray:
     N = 1 << num_qubits
     omega = np.exp(2j * np.pi / N)
@@ -150,7 +151,7 @@ _BUILTIN_GATE_NAMES = [
 ]
 
 
-def named_gate(matrix: np.ndarray, num_targets: int) -> str | None:
+def named_gate(matrix: np.ndarray) -> str | None:
     """Return the OpenQASM 3 name for this uncontrolled gate, or None."""
     matrix = np.asarray(matrix, dtype=complex)
     for name, builtin in _BUILTIN_GATE_NAMES:
