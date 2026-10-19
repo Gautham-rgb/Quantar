@@ -192,7 +192,7 @@ def quantum_subroutine(N: int, a: int) -> str:
 
 def shors_alg(N: int):
     if is_prime_fast(N):
-        return None
+        return (1, N)
 
     is_power, factors = is_perfect_power(N)
     if is_power:
@@ -346,6 +346,7 @@ def shors_alg_optim(N: int):
 if __name__ == "__main__":
     import time
     t0 = time.time()
-    print(shors_alg(21))
+    num = int(input("give some number to factorize: "))
+    print(shors_alg(num))
     t1 = time.time()
     print(f"time taken: {t1 - t0}s")

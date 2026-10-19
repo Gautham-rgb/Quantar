@@ -1,48 +1,27 @@
-# Quantar Quantum Language Grammar with custom operator support
-# A superset of Python with quantum constructs
+# Quantar custom-operator extension.
+#
+# `hatch_build.py` (via lang_systems.build_parser) splices this onto the vendored
+# CPython grammar (Grammar/python.gram) and generates lang_systems/quantar_parser.py.
+# Everything below is the *only* quantum-specific grammar; the whole rest of
+# Python is inherited, so quantar is a strict superset of Python.
+#
+# Operators are matched against the `quantar.operators` registry at runtime, in
+# two forms (see lang_systems/quantar.py):
+#
+#   symbolic    a  <->  b        matched by QUANTUM_OP   (lang_systems/quantar_tokens.py)
+#   identifier  a  CNOT  b       matched by QUANTUM_NAME (any registered NAME)
+#
+# Precedence: custom operators bind *between* `comparison` and `bitwise_or`.
+# lang_systems.build_parser rewires `comparison: a=quantum_expr ...`; to move the
+# level, change that one splice and the rule living here. The resulting order,
+# loosest to tightest, is:
+#
+#   or > and > not > comparisons > quantum_operator > | ^ & << >> > + - > * / ...
 
-start: file
+quantum_expr[expr_ty]:
+    | a=quantum_expr quantum_operator b=bitwise_or
+    | bitwise_or
 
-file: statements ENDMARKER
-
-statements: statement+
-
-statement:
-    | simple_stmt
-    | compound_stmt
-
-simple_stmt:
-    | expr_stmt
-
-expr_stmt: expr NEWLINE
-
-compound_stmt:
-    | funcdef
-    | if_stmt
-
-funcdef: 'def' NAME '(' ')' ':' block
-
-if_stmt: 'if' expr ':' block ('elif' expr ':' block)* ('else' ':' block)?
-
-block: INDENT statements DEDENT
-
-# Custom operator tokens - matched as single tokens
-# Developers register operators via @operator("NAME") where NAME is the symbol
-# The grammar recognizes OP tokens and the parser dispatches to the registry
-
-expr:
-    | atom trailer*
-
-trailer:
-    | '(' expr? ')'
-    | '.' NAME
-    | OP atom
-
-factor:
-    | atom
-
-atom:
-    | NAME
-    | NUMBER
-    | STRING
-    | '(' expr ')'
+quantum_operator[expr_ty]:
+    | QUANTUM_OP
+    | QUANTUM_NAME

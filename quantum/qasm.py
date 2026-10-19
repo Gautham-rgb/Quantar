@@ -54,7 +54,7 @@ def _gate_call(gate) -> str:
     matrix = np.asarray(gate.matrix, dtype=complex)
     num_controls, num_targets = len(gate.controls), len(gate.targets)
 
-    name = gate.name or gm.named_gate(matrix, num_targets)
+    name = gate.name or gm.named_gate(matrix)
     params = list(gate.params)
 
     if name is None and num_controls == 0 and num_targets == 1:

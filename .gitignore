@@ -10,6 +10,7 @@ __pycache__/
 Grammer/
 python.gram
 python_clean.gram
+quantar_merged.gram
 
 # Distribution / packaging
 .Python

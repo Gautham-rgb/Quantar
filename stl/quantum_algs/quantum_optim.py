@@ -89,7 +89,7 @@ class Ansatz:
         for gate_name, targets, controls, param_idx in self.gates:
             if gate_name in rotation_matrices and param_idx is not None:
                 matrix = rotation_matrices[gate_name](params[param_idx])
-                qc.apply_gate(matrix, targets)
+                qc.apply_gate(matrix, targets) #type: ignore
             elif gate_name in ("CNOT", "CX"):
                 qc.apply_gate(gm.px_MAT(), [targets[1]], control_qubits=[targets[0]])
             elif gate_name == "CZ":
@@ -149,4 +149,4 @@ def measure_pauli_expectation(qc: 'qa.QuantumComputer', pauli_str: str,
     the right basis, samples, and restores the state, so it can be called
     repeatedly during an optimization without disturbing the circuit.
     """
-    return qc.measure_pauli(pauli_str, qubits)
+    return qc.measure_pauli(pauli_str, qubits) #type: ignore

@@ -93,8 +93,8 @@ def rz_MAT(angle: float) -> np.ndarray:
     """RZ rotation gate matrix."""
     c = np.cos(angle / 2)
     s = np.sin(angle / 2)
-    return np.array([[np.cos(angle/2) - 1j*np.sin(angle/2), 0.0], 
-                     [0.0, np.cos(angle/2) + 1j*np.sin(angle/2)]], dtype=complex)
+    return np.array([[c - 1j*s, 0.0], 
+                     [0.0, c + 1j*s]], dtype=complex)
 
 
 def p_MAT(angle: float) -> np.ndarray:
@@ -138,16 +138,21 @@ def iqft_MAT(num_qubits: int) -> np.ndarray:
 # here also works under a `ctrl @` modifier, which is how multi-controlled
 # X and Z (Grover's oracle and diffuser) are written out.
 _BUILTIN_GATE_NAMES = [
-    ("h", h_MAT()),
-    ("x", px_MAT()),
-    ("y", py_MAT()),
-    ("z", pz_MAT()),
-    ("s", s_MAT()),
-    ("sdg", sdg_MAT()),
-    ("t", t_MAT()),
-    ("tdg", tdg_MAT()),
-    ("id", i_MAT()),
-    ("swap", swap_MAT()),
+    ("h", h_MAT),
+    ("x", px_MAT),
+    ("y", py_MAT),
+    ("z", pz_MAT),
+    ("s", s_MAT),
+    ("sdg", sdg_MAT),
+    ("t", t_MAT),
+    ("tdg", tdg_MAT),
+    ("id", i_MAT),
+    ("swap", swap_MAT),
+]
+
+_BUILTIN_ARG_GATE_NAMES = [
+    ("p", p_MAT),
+    
 ]
 
 
@@ -155,14 +160,15 @@ def named_gate(matrix: np.ndarray) -> str | None:
     """Return the OpenQASM 3 name for this uncontrolled gate, or None."""
     matrix = np.asarray(matrix, dtype=complex)
     for name, builtin in _BUILTIN_GATE_NAMES:
-        if builtin.shape == matrix.shape and np.allclose(builtin, matrix):
+        builtin_matrix = builtin() if callable(builtin) else builtin
+        if builtin_matrix.shape == matrix.shape and np.allclose(builtin_matrix, matrix):
             return name
     return None
 
 
 # Gates whose OpenQASM 3 name already carries its own control operand, so a
 # `ctrl @` modifier must not be added on top of it.
-_CONTROLLED_BUILTIN_ARITY = {"cx": 1, "cy": 1, "cz": 1, "cp": 1, "ccx": 2, "cswap": 2}
+_CONTROLLED_BUILTIN_ARITY = {"cx": 1, "cy": 1, "cz": 1, "cp": 1, "ccx": 2, "cswap": 1}
 
 
 def name_is_controlled(name: str | None, num_controls: int) -> bool:
