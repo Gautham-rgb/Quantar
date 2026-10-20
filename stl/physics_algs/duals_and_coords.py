@@ -1,7 +1,7 @@
 """Physics algorithms: automatic differentiation and numerical integration."""
 
 import numpy as np
-from typing import Callable
+from typing import Callable, Literal
 
 
 class Dual:
@@ -247,7 +247,7 @@ class SpaceMetric:
     raw gradients (partial derivatives) into physical gradients.
     """
 
-    def __init__(self, system="cartesian"):
+    def __init__(self, system: Literal["cartesian", "spherical", "cylindrical"] = "cartesian"):
         """Initialize metric for given coordinate system.
 
         Args:

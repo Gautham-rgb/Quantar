@@ -7,7 +7,6 @@ import numpy as np
 from typing import Callable, Optional, List, Literal
 from dataclasses import dataclass
 
-import numpy as np
 from quantum.qubit_abs import QuantumComputer
 from quantum.gate_matrix import rx_MAT, ry_MAT, rz_MAT, p_MAT, px_MAT
 from stl.quantum_algs.quantum_optim import (
@@ -68,7 +67,7 @@ class QuantumOptimizer:
         self._ansatz = hardware_efficient_ansatz(n_qubits, n_layers, self._qc)
         
         # Optional Hamiltonian for VQE
-        self._hamiltonian = None
+        self._hamiltonian = hamiltonian
     
     def set_hamiltonian(self, hamiltonian):
         """Set Hamiltonian for VQE."""
@@ -138,7 +137,7 @@ class QuantumOptimizer:
                     # Parameter shift rule: gradient = 0.5 * (E(θ+π/2) - E(θ-π/2))
                     e_plus = energy(params_plus)
                     e_minus = energy(params_minus)
-                    grad[j] = 0.5 * (energy(params_plus) - energy(params_minus))
+                    grad[j] = 0.5 * (e_plus - e_minus)
                 
                 params -= lr * grad
                 
@@ -219,7 +218,7 @@ class QuantumOptimizer:
         
         return OptimizeResult(
             optimal_params=params,
-            min_cost=history[-1],
+            min_cost=min(history),
             history=history,
             n_iterations=len(history) - 1,
             success=True,

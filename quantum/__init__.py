@@ -5,7 +5,7 @@ Public API::
     from quantum import QuantumComputer, Qubit, Gate, CircuitGate
     from quantum import h_MAT, px_MAT, crk, to_openqasm3
 
-Internals are grouped by concern (seven files, not a pile of fragments):
+Internals are grouped by concern (eight files, not a pile of fragments):
 
     qubit_abs     QuantumComputer and Qubit -- the simulator itself
     gate_abs      Gate, CompositeGate, CircuitGate -- how operations are recorded
@@ -14,6 +14,7 @@ Internals are grouped by concern (seven files, not a pile of fragments):
     basic_funcs   bit helpers and the apply entry points wiring kernels to gates
     composites    crk (controlled phase shifts)
     qasm          OpenQASM 3 export
+    parse_qasm    OpenQASM 3 import (parse_qasm / load)
 
 QFT/IQFT circuit builders (`qft_program`, `qft_gate`, ...) live in
 `stl.quantum_algs.shors_alg`, next to the algorithm that uses them.

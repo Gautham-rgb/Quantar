@@ -20,7 +20,6 @@ import numba as nb
 
 import quantum.gate_matrix as gm
 import quantum.qubit_abs as qa
-from stl.quantum_algs.quantum_optim_hl import QuantumOptimizer
 
 
 @nb.jit(nopython=True)

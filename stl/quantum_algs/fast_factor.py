@@ -55,9 +55,9 @@ def is_probable_prime(n: int, k: int = 10) -> bool:
 
 
 def trial_division(n: int, limit: int = 10000) -> Optional[Tuple[int, int]]:
-    """Fast trial division with precomputed primes."""
+    """Fast trial division with precomputed primes up to `limit`."""
     for p in _SMALL_PRIMES:
-        if p * p > n:
+        if p > limit or p * p > n:
             break
         if n % p == 0:
             return (p, n // p)

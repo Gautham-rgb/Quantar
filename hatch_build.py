@@ -12,6 +12,8 @@ from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
+ROOT = Path(__file__).resolve().parent
+
 
 class PegenBuildHook(BuildHookInterface):
     """Generate the Quantar parser before building."""
@@ -24,11 +26,11 @@ class PegenBuildHook(BuildHookInterface):
 
     def _fetch_python_grammar(self):
         """Download the CPython grammar matching the installer's Python version."""
-        grammar_dir = Path("Grammar")
+        grammar_dir = ROOT / "Grammar"
         grammar_dir.mkdir(exist_ok=True)
         target = grammar_dir / "python.gram"
 
-        if target.exists():
+        if target.exists() and target.stat().st_size > 0:
             print(f"Using existing {target}")
             return
 
@@ -36,12 +38,15 @@ class PegenBuildHook(BuildHookInterface):
         base = "https://raw.githubusercontent.com/python/cpython"
         for ref in (version, "main"):
             url = f"{base}/{ref}/Grammar/python.gram"
+            temporary = target.with_suffix(".gram.tmp")
             print(f"Fetching CPython grammar from {url}")
             try:
-                urllib.request.urlretrieve(url, target)
+                urllib.request.urlretrieve(url, temporary)
+                temporary.replace(target)  # atomic: never leave a partial file
                 print(f"Downloaded {target} ({target.stat().st_size} bytes)")
                 return
             except Exception as error:  # noqa: BLE001
+                temporary.unlink(missing_ok=True)
                 print(f"Could not fetch {url}: {error}", file=sys.stderr)
 
         raise RuntimeError(
@@ -49,6 +54,12 @@ class PegenBuildHook(BuildHookInterface):
         )
 
     def _generate_parser(self):
+        # The build hook runs in an isolated environment where the project root
+        # is not necessarily on sys.path, so make our own modules importable.
+        root = str(ROOT)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+
         from lang_systems.build_parser import build
 
         build()

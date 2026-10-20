@@ -94,7 +94,9 @@ def _apply_gate_tensor_einsum(state: np.ndarray, gate_matrix: np.ndarray, num_qu
     else:
         control_mask = np.ones((2,) * num_qubits, dtype=bool)
 
-    target_axes = sorted(num_qubits - 1 - bit for bit in target_bits)
+    # Keep the matrix's own bit order: target_bits[0] is the gate's most
+    # significant bit, so the matching tensor axes must not be sorted.
+    target_axes = [num_qubits - 1 - bit for bit in target_bits]
     all_axes = 'abcdefghijklmnopqrstuvwxyz'[:num_qubits]
 
     if len(target_axes) == 1:
@@ -106,7 +108,9 @@ def _apply_gate_tensor_einsum(state: np.ndarray, gate_matrix: np.ndarray, num_qu
     else:
         axis1, axis2 = target_axes
         idx1, idx2 = all_axes[axis1], all_axes[axis2]
-        gate_idx = 'Y' + idx1 + 'Z' + idx2
+        # Gate axes are (row0, row1, column0, column1); rows become the output
+        # target axes and columns contract the input target axes.
+        gate_idx = 'YZ' + idx1 + idx2
         out_indices = list(all_axes)
         out_indices[axis1] = 'Y'
         out_indices[axis2] = 'Z'

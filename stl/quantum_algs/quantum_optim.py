@@ -32,6 +32,8 @@ def pauli_string_to_matrices(pauli_str: str) -> List[np.ndarray]:
 
 def pauli_string_to_tensor(pauli_str: str) -> np.ndarray:
     """Tensor product of the Pauli matrices in `pauli_str`."""
+    if not pauli_str:
+        return np.eye(1, dtype=complex)
     matrices = pauli_string_to_matrices(pauli_str)
     result = matrices[0]
     for matrix in matrices[1:]:
@@ -137,16 +139,16 @@ class Hamiltonian:
         """Estimate <H> as the weighted sum of term expectations."""
         total = 0.0
         for coefficient, pauli, qubits in self.terms:
-            total += coefficient * measure_pauli_expectation(qc, pauli, qubits)
+            total += coefficient * measure_pauli_expectation(qc, pauli, qubits, shots)
         return total
 
 
 def measure_pauli_expectation(qc: 'qa.QuantumComputer', pauli_str: str,
-                              qubits: List[int]) -> float:
+                              qubits: List[int], shots: int = 1000) -> float:
     """Estimate <psi|P|psi> for a Pauli string on the given qubit indices.
 
     Delegates to `QuantumComputer.measure_pauli`, which rotates each qubit into
     the right basis, samples, and restores the state, so it can be called
     repeatedly during an optimization without disturbing the circuit.
     """
-    return qc.measure_pauli(pauli_str, qubits) #type: ignore
+    return qc.measure_pauli(pauli_str, qubits, shots=shots) #type: ignore

@@ -278,7 +278,7 @@ class Visitor(oqa3.visitor.QASMVisitor):
             elif kind is GateModifierName.inv:
                 inverted = True
             elif kind is GateModifierName.pow:
-                power = evaluate(modifier.argument, self.bindings)
+                power = evaluate(modifier.argument, self.bindings) #type: ignore
 
         if inverted:
             matrix = matrix.conj().T
@@ -306,8 +306,8 @@ class Visitor(oqa3.visitor.QASMVisitor):
 
         self.qc.apply_gate(
             matrix,
-            targets,
-            control_qubits=controls,
+            targets, #type: ignore
+            control_qubits=controls, #type: ignore
             qasm_name=record_name,
             qasm_params=record_params,
         )
