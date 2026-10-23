@@ -20,10 +20,10 @@ from quantum.kernels import apply_gate_kernel
 def _apply_gate_tensor(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int,
                        target_bits: list[int], control_bits: list[int],
                        out: np.ndarray | None = None) -> np.ndarray:
-    """Apply a gate with the numba kernel (fast and correct for every size).
+    """Apply a gate through the kernel dispatcher.
 
-    The tensor/einsum alternative was slower for larger registers, so the kernel
-    is what the simulator reaches for by default.
+    Large registers use the JIT kernel; small ones use its vectorized NumPy
+    fallback. The tensor/einsum alternative was slower for larger registers.
     """
     if state.size != 1 << num_qubits:
         raise ValueError(f"A {num_qubits}-qubit register holds {1 << num_qubits} amplitudes, not {state.size}.")
@@ -132,10 +132,10 @@ def apply_local_gate(state: np.ndarray, gate_matrix: np.ndarray, num_qubits: int
     only and the controls say where that action is conditional. `num_qubits`
     describes the register `state` belongs to.
 
-    The work is a single fused pass over the amplitudes, done in parallel by
-    `apply_gate_kernel`, so cost is O(2**num_qubits) instead of the
-    O(4**num_qubits) of `embedded_gate` -- which is what makes wide registers
-    like Shor's practical at all.
+    The work is a single fused pass over the amplitudes, JIT-parallel for large
+    registers and vectorized with NumPy for small ones, so cost is
+    O(2**num_qubits) instead of the O(4**num_qubits) of `embedded_gate` -- which
+    is what makes wide registers like Shor's practical at all.
 
     `state` is never written to. Pass `out=` to choose where the result lands;
     reusing one buffer across gates is what keeps the cost near a plain copy,

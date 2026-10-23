@@ -19,9 +19,11 @@ def qtr_runner(filename: str | Path, output_path: str | Path | None = None):
     tree = ast_builder.parse_ast(source_code, str(filename))
 
     if output_path:
-        python_source = unparse(tree)
-        runtime_imports = "from quantar.runtime import *\n\n"
-        final_code = runtime_imports + python_source 
+        python_source = unparse(ast_builder.lower_ast(tree))
+        runtime_imports = (
+            "from lang_systems.runtime import apply_quantar_operator as __quantar_apply__\n\n"
+        )
+        final_code = runtime_imports + python_source
 
         out_path = Path(output_path) if output_path else path.with_suffix(".py")
         out_path.write_text(final_code, "utf-8")

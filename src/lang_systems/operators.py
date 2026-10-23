@@ -26,8 +26,6 @@ from importlib import import_module
 from types import ModuleType
 from typing import Any, Callable, Literal
 
-import numpy as np
-
 
 OperatorKind = Literal[
     "nullary",
@@ -115,6 +113,8 @@ def _register(name: str, kind: str, func: Callable) -> Callable:
 
     # For matrix kind, call once now to validate and cache the matrix.
     if kind == "matrix":
+        import numpy as np
+
         try:
             matrix = func()
         except TypeError as error:
@@ -281,8 +281,12 @@ def list_operators(kind: str | None = None) -> list[str]:
     return [name for name in _global_operators if _operator_metadata.get(name, {}).get("kind") == wanted]
 
 def list_known_operators() -> dict[str, str]:
+    """Return every registered and built-in operator mapped to its kind."""
     names = set(list_operators()) | set(BUILTIN_OPERATOR_KINDS)
-    return {name: get_known_operator_kind(name) for name in names} #type: ignore
+    return {
+        name: get_known_operator_kind(name) or "callable"
+        for name in names
+    }
 
 
 def load_operators(*modules: str | ModuleType) -> tuple[ModuleType, ...]:

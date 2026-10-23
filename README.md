@@ -32,6 +32,46 @@ pip install quantar[optimization]
 pip install quantar[lsp]
 ```
 
+## Running Quantar
+
+```bash
+qtr path/to/program.qtr
+```
+
+Compile a file to ordinary Python instead of executing it:
+
+```bash
+qtr path/to/program.qtr --compile path/to/program.py
+```
+
+During development, the same runner is available as a module:
+
+```bash
+python -m lang_systems.runner path/to/program.qtr
+```
+
+Small registers use vectorized NumPy so short programs skip Numba's startup and
+compilation cost. Registers with at least 1,048,576 amplitudes use the JIT. Set
+`QUANTAR_NUMBA_MIN_AMPLITUDES` to change that cutoff, or `QUANTAR_NUMBA=0` to
+disable Numba entirely.
+
+## VS Code extension
+
+The extension lives in `editors/vscode`. It provides `.qtr` syntax highlighting,
+parser diagnostics, and registry-driven operator highlighting through a
+`pygls` language server.
+
+```bash
+pip install -e ".[lsp]"
+cd editors/vscode
+npm install
+npm run compile
+```
+
+Open `editors/vscode` in VS Code and run the `Run Quantar Extension` launch
+configuration. The extension also adds `Quantar: Run File` and
+`Quantar: Compile File to Python` commands.
+
 ## Parsing Quantar
 
 `lang_systems.parse()` returns pegen's raw parse tree. This is the low-level
@@ -80,7 +120,22 @@ tree = parse("a >< b\n")
 
 ## Quantar as a library
 
-The quantum and physics packages can be imported directly from Python:
+`quantar` is the umbrella package. It loads the language, quantum, and physics
+packages lazily, so importing it stays lightweight:
+
+```python
+import quantar
+
+q = quantar.QuantumComputer(2)
+tree = quantar.parse_ast("a <-> b\n")
+print(quantar.__version__)
+
+quantar.lang_systems
+quantar.quantum
+quantar.stl
+```
+
+The underlying packages can still be imported directly:
 
 ```python
 import quantum
@@ -88,12 +143,19 @@ from stl.quantum_algs.shors_alg import shors_alg
 from stl.physics_algs.units import Quantity, Unit
 ```
 
-See the modules under `quantum/` and `stl/` for the available gates, circuits,
-algorithms, and physics helpers.
+See the modules under `src/quantum/` and `src/stl/` for the available gates,
+circuits, algorithms, and physics helpers.
 
 ## Development
 
-Regenerate the parser after changing `lang_systems/quantar.gram`:
+The Python packages live under `src/`. Install the project in editable mode
+before running the CLI or LSP from a checkout:
+
+```bash
+pip install -e ".[lsp]"
+```
+
+Regenerate the parser after changing `src/lang_systems/quantar.gram`:
 
 ```bash
 python -m lang_systems.pegen_gram_gen
@@ -105,16 +167,16 @@ Build the wheel and source distribution:
 uv build
 ```
 
-The generated parser is `lang_systems/quantar_parser.py`; the build hook in
+The generated parser is `src/lang_systems/quantar_parser.py`; the build hook in
 `hatch_build.py` regenerates it automatically. The parser is generated from
 CPython's `Grammar/python.gram` plus the operator overlay in
-`lang_systems/quantar.gram`.
+`src/lang_systems/quantar.gram`.
 
 ## Status
 
-Quantar currently provides the parser, AST, quantum library, and physics
-library. A CLI, bytecode interpreter, and editor extension are not implemented
-yet.
+Quantar currently provides the parser, AST, quantum library, physics library,
+a CLI runner/compiler, and a VS Code extension scaffold. A bytecode interpreter
+and debugger are not implemented yet.
 
 ## Feedback
 

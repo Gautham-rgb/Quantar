@@ -1,8 +1,8 @@
-"""Generate ``lang_systems/quantar_parser.py``.
+"""Generate ``src/lang_systems/quantar_parser.py``.
 
 Quantar is a *superset* of Python: this builds its parser from the vendored
 CPython grammar (``Grammar/python.gram``) plus the small operator overlay in
-``lang_systems/quantar.gram``.
+``src/lang_systems/quantar.gram``.
 
 pegen 0.3.0 is the last PyPI release and predates several things we need, so a
 few fixes are applied before generating (each one is marked below). Run directly
@@ -16,11 +16,12 @@ or let the build do it (see ``hatch_build.py``).
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+PACKAGE_ROOT = Path(__file__).resolve().parent
+ROOT = PACKAGE_ROOT.parent.parent
 BASE_GRAMMAR = ROOT / "Grammar" / "python.gram"
-OVERLAY_GRAMMAR = ROOT / "lang_systems" / "quantar.gram"
+OVERLAY_GRAMMAR = PACKAGE_ROOT / "quantar.gram"
 MERGED_GRAMMAR = ROOT / "Grammar" / "quantar_merged.gram"
-OUTPUT_PARSER = ROOT / "lang_systems" / "quantar_parser.py"
+OUTPUT_PARSER = PACKAGE_ROOT / "quantar_parser.py"
 
 # Pseudo-tokens the overlay grammar references; implemented at runtime in
 # lang_systems/quantar.py (registered here so pegen's checker accepts them).

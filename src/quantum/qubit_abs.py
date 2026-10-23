@@ -32,8 +32,7 @@ from quantum.basic_funcs import (
     bit_mask, embedded_gate, apply_local_gate, _is_diagonal_local, _is_swap_local,
 )
 from quantum.kernels import (
-    HAVE_NUMBA, fused_diagonal_kernel, fused_diagonal_numpy,
-    swap_run_kernel, swap_run_numpy, sample_counts,
+    fused_diagonal_kernel, swap_run_kernel, sample_counts,
 )
 
 class Qubit:
@@ -429,10 +428,7 @@ class QuantumComputer:
             self._scratch = np.empty_like(self.state_vector)
         out = self._scratch.reshape(-1) #type: ignore
 
-        if HAVE_NUMBA:
-            swap_run_kernel(out, flat, pairs)
-        else:
-            swap_run_numpy(out, flat, pairs)
+        swap_run_kernel(out, flat, pairs)
 
         previous_state = self.state_vector
         self.state_vector = out.reshape(-1, 1)
@@ -455,10 +451,7 @@ class QuantumComputer:
             self._scratch = np.empty_like(self.state_vector)
         out = self._scratch.reshape(-1) #type: ignore
 
-        if HAVE_NUMBA:
-            fused_diagonal_kernel(out, flat, control_masks, target_bits, diag0, diag1)
-        else:
-            fused_diagonal_numpy(out, flat, control_masks, target_bits, diag0, diag1)
+        fused_diagonal_kernel(out, flat, control_masks, target_bits, diag0, diag1)
 
         previous_state = self.state_vector
         self.state_vector = out.reshape(-1, 1)

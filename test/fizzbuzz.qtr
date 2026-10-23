@@ -1,0 +1,11 @@
+num = int(input("Give a random number: "))
+
+tot_str = ""
+
+if num % 3 == 0:
+    tot_str += "fizz"
+
+if num % 5 == 0:
+    tot_str += "buzz"
+
+print(tot_str)

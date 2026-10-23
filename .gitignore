@@ -6,11 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
-# grammar
-Grammar/
-python.gram
-python_clean.gram
-quantar_merged.gram
+# generated grammar
+Grammar/quantar_merged.gram
 
 # Distribution / packaging
 .Python
@@ -208,6 +205,11 @@ cython_debug/
 # .vscode/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
+
+# VS Code extension build output
+editors/vscode/node_modules/
+editors/vscode/out/
+editors/vscode/*.vsix
 
 # Ruff stuff:
 .ruff_cache/

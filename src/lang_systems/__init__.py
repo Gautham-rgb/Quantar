@@ -8,6 +8,8 @@ lazily so that importing this package does not require the generated parser
 
 import importlib
 
+__version__ = "0.1.1"
+
 _EXPORTS = {
     "parse": ("lang_systems.quantar", "parse"),
     "parse_ast": ("lang_systems.ast_builder", "parse_ast"),
@@ -17,6 +19,7 @@ _EXPORTS = {
     "QuantumOp": ("lang_systems.ast_builder", "QuantumOp"),
     "LowerQuantumOps": ("lang_systems.ast_builder", "LowerQuantumOps"),
     "load_operators": ("lang_systems.operators", "load_operators"),
+    "list_known_operators": ("lang_systems.operators", "list_known_operators"),
     "QuantarNodeVisitor": ("lang_systems.visitors", "QuantarNodeVisitor"),
     "OperatorCollector": ("lang_systems.visitors", "OperatorCollector"),
 }

@@ -7,8 +7,10 @@ Every pass over the amplitudes funnels through one of these:
     swap_run_kernel        a whole run of disjoint SWAPs as one permutation
     sample_counts          draw measurement outcomes from probabilities
 
-Each `*_kernel` has a `*_numpy` twin that runs when numba is unavailable
-(`HAVE_NUMBA` is False), so the simulator stays correct with or without the JIT.
+Each `*_kernel` dispatches to a `*_numpy` twin for small registers or when numba
+is unavailable (`HAVE_NUMBA` is False), so the simulator stays correct with or
+without the JIT. Numba is imported lazily on the first large-register run; small
+programs avoid its several-second compile cost.
 
 Quote of the house rules these obey: read each amplitude once, write it once;
 never mutate the input state in place (the caller passes an `out` buffer).
@@ -16,25 +18,57 @@ never mutate the input state in place (the caller passes an `out` buffer).
 
 from __future__ import annotations
 
+import importlib.util
+import os
+
 import numpy as np
 
+_NUMBA_REQUESTED = os.environ.get("QUANTAR_NUMBA", "1").strip().lower() not in {
+    "0", "false", "no", "off",
+}
 try:
-    from numba import jit, prange
-    HAVE_NUMBA = True
-except Exception:
-    HAVE_NUMBA = False
+    _NUMBA_INSTALLED = importlib.util.find_spec("numba") is not None
+except (ImportError, ValueError):
+    _NUMBA_INSTALLED = False
 
-    def jit(*args, **kwargs):
-        def decorate(func):
-            return func
-        return decorate
+# The JIT is reserved for registers where its warm speed pays back the
+# several-second compile cost. Small programs use the vectorized NumPy path.
+HAVE_NUMBA = _NUMBA_REQUESTED and _NUMBA_INSTALLED
+NUMBA_MIN_AMPLITUDES = int(
+    os.environ.get("QUANTAR_NUMBA_MIN_AMPLITUDES", str(1 << 20))
+)
 
-    prange = range
+prange = range
+_compiled_kernels: dict[str, object] = {}
 
 
-@jit(parallel=True)
-def apply_gate_kernel(state, new_state, matrix, target_mask: int,
-                      control_mask: int, offsets, num_values: int):
+def should_use_numba(num_amplitudes: int) -> bool:
+    """Return whether this register is large enough to benefit from the JIT."""
+    return HAVE_NUMBA and num_amplitudes >= NUMBA_MIN_AMPLITUDES
+
+
+def _compiled(name: str, implementation):
+    """Compile a kernel on first use, returning None if numba is unavailable."""
+    if name in _compiled_kernels:
+        return _compiled_kernels[name]
+
+    try:
+        from numba import jit, prange as numba_prange
+    except Exception:
+        global HAVE_NUMBA
+        HAVE_NUMBA = False
+        _compiled_kernels[name] = None
+        return None
+
+    global prange
+    prange = numba_prange
+    compiled = jit(parallel=True)(implementation)
+    _compiled_kernels[name] = compiled
+    return compiled
+
+
+def _apply_gate_kernel_impl(state, new_state, matrix, target_mask: int,
+                            control_mask: int, offsets, num_values: int):
     """Apply one gate to the amplitudes of `state`, writing into `new_state`.
 
     `state` and `new_state` have the same length; `matrix` is the gate acting on
@@ -56,8 +90,44 @@ def apply_gate_kernel(state, new_state, matrix, target_mask: int,
                 new_state[basis | offsets[row]] = amplitude
 
 
-@jit(parallel=True)
-def fused_diagonal_kernel(new_state, state, control_masks, target_bits, diag0, diag1):
+def _apply_gate_kernel_numpy(state, new_state, matrix, target_mask: int,
+                             control_mask: int, offsets, num_values: int):
+    """Vectorized stand-in for `_apply_gate_kernel_impl`."""
+    basis = np.arange(state.shape[0], dtype=np.int64)
+    new_state[:] = state
+
+    if control_mask:
+        allowed = (basis & control_mask) == control_mask
+    else:
+        allowed = np.ones(state.shape[0], dtype=bool)
+    anchors = allowed & ((basis & target_mask) == 0)
+    if not np.any(anchors):
+        return
+
+    base = basis[anchors]
+    indices = base[:, None] | np.asarray(offsets, dtype=np.int64)[None, :]
+    gate = np.asarray(matrix).reshape(num_values, num_values)
+    new_state[indices] = state[indices] @ gate.T
+
+
+def apply_gate_kernel(state, new_state, matrix, target_mask: int,
+                      control_mask: int, offsets, num_values: int):
+    """Apply one gate through the JIT for large registers, NumPy otherwise."""
+    if should_use_numba(state.shape[0]):
+        compiled = _compiled("apply_gate", _apply_gate_kernel_impl)
+        if compiled is not None:
+            compiled(
+                state, new_state, matrix, target_mask, control_mask,
+                offsets, num_values,
+            )
+            return
+    _apply_gate_kernel_numpy(
+        state, new_state, matrix, target_mask, control_mask, offsets,
+        num_values,
+    )
+
+
+def _fused_diagonal_kernel_impl(new_state, state, control_masks, target_bits, diag0, diag1):
     """Apply a whole run of diagonal single-target gates in one pass.
 
     Each gate is `diag(a, b)` on its own target with its own controls, so the
@@ -93,8 +163,19 @@ def fused_diagonal_numpy(new_state, state, control_masks, target_bits, diag0, di
     new_state[:] = state * value
 
 
-@jit(parallel=True)
-def swap_run_kernel(new_state, state, pairs):
+def fused_diagonal_kernel(new_state, state, control_masks, target_bits, diag0, diag1):
+    """Fuse diagonal gates through the JIT for large registers, NumPy otherwise."""
+    if should_use_numba(state.shape[0]):
+        compiled = _compiled("fused_diagonal", _fused_diagonal_kernel_impl)
+        if compiled is not None:
+            compiled(new_state, state, control_masks, target_bits, diag0, diag1)
+            return
+    fused_diagonal_numpy(
+        new_state, state, control_masks, target_bits, diag0, diag1,
+    )
+
+
+def _swap_run_kernel_impl(new_state, state, pairs):
     """Apply a run of disjoint SWAPs as one permutation pass over the state.
 
     `pairs` holds the two bit positions each swap exchanges. Disjoint swaps
@@ -126,6 +207,16 @@ def swap_run_numpy(new_state, state, pairs):
         bit_high = (swapped >> high) & 1
         swapped = (swapped & ~(1 << low) & ~(1 << high)) | (bit_low << high) | (bit_high << low)
     new_state[:] = state[swapped]
+
+
+def swap_run_kernel(new_state, state, pairs):
+    """Run disjoint SWAPs through the JIT for large registers, NumPy otherwise."""
+    if should_use_numba(state.shape[0]):
+        compiled = _compiled("swap_run", _swap_run_kernel_impl)
+        if compiled is not None:
+            compiled(new_state, state, pairs)
+            return
+    swap_run_numpy(new_state, state, pairs)
 
 
 def sample_counts(probabilities: np.ndarray, num_samples: int, dimension: int) -> np.ndarray:

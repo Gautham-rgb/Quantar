@@ -1,5 +1,6 @@
 {
     "python.REPL.enableREPLSmartSend": false,
+    "python.analysis.extraPaths": ["src"],
     "python-envs.pythonProjects": [
         {
             "path": ".",
