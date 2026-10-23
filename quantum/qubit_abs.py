@@ -24,7 +24,7 @@ from typing import Callable
 
 from quantum.qasm import to_openqasm3
 import quantum.gate_matrix as gm
-from quantar.operators import get_global_operator, normalize_kind
+from lang_systems.operators import get_global_operator, normalize_kind
 
 from quantum.gate_abs import Gate, CompositeGate, CircuitGate
 

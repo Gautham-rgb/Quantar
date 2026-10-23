@@ -1,5 +1,7 @@
-"""Physics algorithms: automatic differentiation and numerical integration."""
+﻿"""Physics algorithms: automatic differentiation, numerical integration,
+and classical dynamics."""
 
+import inspect
 import numpy as np
 from typing import Callable, Literal
 
@@ -286,3 +288,195 @@ class SpaceMetric:
         """
         h = self.scale_factors(coords)
         return [raw_gradient[i] / h[i] for i in range(len(h))]
+
+
+# --- Classical dynamics ------------------------------------------------------
+
+def _broadcast_mass(masses, shape):
+    """Broadcast a scalar, per-particle, or per-component mass to ``shape``."""
+    values = np.asarray(masses, dtype=float)
+    if values.shape == shape:
+        return values
+    if values.ndim == 0:
+        return np.full(shape, float(values))
+    if values.shape == shape[:-1]:
+        return np.broadcast_to(values[..., None], shape)
+    return np.broadcast_to(values, shape)
+
+
+def kinetic_energy(velocities, masses=1.0) -> float:
+    """Kinetic energy ``0.5 * sum(m * v**2)`` for one configuration.
+
+    ``masses`` may be a scalar, per-particle ``(n,)``, or per-component array.
+    """
+    velocities = np.asarray(velocities, dtype=float)
+    mass = _broadcast_mass(masses, velocities.shape)
+    return float(0.5 * np.sum(mass * velocities * velocities))
+
+
+def _required_parameters(function):
+    target = getattr(function, "py_func", function)
+    try:
+        parameters = inspect.signature(target).parameters.values()
+    except (TypeError, ValueError):
+        return None
+
+    positional_kinds = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    return [
+        parameter
+        for parameter in parameters
+        if parameter.kind in positional_kinds and parameter.default is parameter.empty
+    ]
+
+
+def _call_with_arity(function, position, velocity, time):
+    """Call a dynamics function with the arity it declares.
+
+    Supports ``f(x)``, ``f(x, v)`` and ``f(x, v, t)``.  numba dispatchers are
+    inspected through their ``py_func``.
+    """
+    required = _required_parameters(function)
+    if required is not None:
+        if len(required) <= 1:
+            return function(position)
+        if len(required) == 2:
+            return function(position, velocity)
+        return function(position, velocity, time)
+
+    try:
+        return function(position, velocity, time)
+    except TypeError:
+        try:
+            return function(position, velocity)
+        except TypeError:
+            return function(position)
+
+
+class Trajectory:
+    """Sampled positions, velocities and times from an integrator."""
+
+    def __init__(self, positions, velocities, times):
+        self.positions = np.asarray(positions, dtype=float)
+        self.velocities = np.asarray(velocities, dtype=float)
+        self.times = np.asarray(times, dtype=float)
+
+    def __len__(self) -> int:
+        return int(self.times.size)
+
+    def __getitem__(self, index):
+        return self.times[index], self.positions[index], self.velocities[index]
+
+    def __repr__(self) -> str:
+        return (
+            f"Trajectory(samples={len(self)}, t=[{self.times[0]:g}, {self.times[-1]:g}], "
+            f"shape={self.positions.shape[1:]})"
+        )
+
+    def kinetic_energy(self, masses=1.0) -> np.ndarray:
+        """Kinetic energy at every sampled time."""
+        return np.asarray(
+            [kinetic_energy(velocity, masses) for velocity in self.velocities],
+            dtype=float,
+        )
+
+    def energy(self, potential: Callable, masses=1.0) -> np.ndarray:
+        """Total energy at every sampled time, for ``potential(position)``."""
+        potential_values = np.asarray(
+            [potential(position) for position in self.positions], dtype=float
+        )
+        return self.kinetic_energy(masses) + potential_values
+
+
+def velocity_verlet(
+    positions,
+    velocities,
+    dt: float,
+    steps: int,
+    acceleration: Callable | None = None,
+    *,
+    force: Callable | None = None,
+    masses=1.0,
+    t0: float = 0.0,
+    save_every: int = 1,) -> Trajectory:
+
+    """Integrate dynamics with the velocity-Verlet scheme.
+
+    The update is the standard one::
+
+        x(t+dt) = x + v dt + 0.5 a(t) dt^2
+        v(t+dt) = v + 0.5 (a(t) + a(t+dt)) dt
+
+    Pass either ``acceleration`` (``a(x)``, ``a(x, v)`` or ``a(x, v, t)``) or
+    ``force`` (same signatures, divided by ``masses``).  ``masses`` applies only
+    to ``force=``.  Accelerations may be scalar or per-particle arrays; they are
+    broadcast to the shape of ``positions``.
+
+    Returns a :class:`Trajectory`.  ``save_every`` stores every n-th step (the
+    initial and final states are always stored).
+
+    Example
+    -------
+    >>> traj = velocity_verlet([1.0, 0.0], [0.0, 1.0], 0.01, 628, lambda x: -x)
+    >>> np.allclose(traj.positions[-1], [1.0, 0.0], atol=5e-3)
+    True
+    """
+    if (acceleration is None) == (force is None):
+        raise ValueError("Pass exactly one of 'acceleration' or 'force'.")
+    if dt <= 0:
+        raise ValueError("dt must be positive.")
+    if steps < 0:
+        raise ValueError("steps must be non-negative.")
+    if save_every < 1:
+        raise ValueError("save_every must be at least 1.")
+
+    x = np.array(positions, dtype=float, copy=True)
+    v = np.array(velocities, dtype=float, copy=True)
+    if x.shape != v.shape:
+        raise ValueError(f"positions {x.shape} and velocities {v.shape} must match.")
+    if x.size == 0:
+        raise ValueError("positions must not be empty.")
+
+    def acceleration_at(position, velocity, time):
+
+        if force is not None:
+            mass = _broadcast_mass(masses, x.shape)
+            force_value = _call_with_arity(force, position, velocity, time)
+            return np.asarray(force_value, dtype=float) / mass
+
+        else:
+            return _call_with_arity(acceleration, position, velocity, time)
+
+    def evaluate_acceleration(position, velocity, time):
+        value = np.asarray(acceleration_at(position, velocity, time), dtype=float)
+        if value.shape == x.shape:
+            return value
+        return np.broadcast_to(value, x.shape).astype(float, copy=True)
+
+    current_time = float(t0)
+    accel = evaluate_acceleration(x, v, current_time)
+
+    times = [current_time]
+    positions_out = [x.copy()]
+    velocities_out = [v.copy()]
+
+    for step in range(1, steps + 1):
+        x = x + v * dt + 0.5 * accel * dt * dt
+        current_time = t0 + step * dt
+        new_accel = evaluate_acceleration(x, v, current_time)
+        v = v + 0.5 * (accel + new_accel) * dt
+        accel = new_accel
+
+        if step % save_every == 0 or step == steps:
+            times.append(current_time)
+            positions_out.append(x.copy())
+            velocities_out.append(v.copy())
+
+    return Trajectory(
+        np.asarray(positions_out),
+        np.asarray(velocities_out),
+        np.asarray(times),
+    )
+

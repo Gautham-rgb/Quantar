@@ -2,7 +2,7 @@
 
 Quantar's parser is generated from the vendored CPython grammar
 (``Grammar/python.gram``) plus the operator overlay (``lang_systems/quantar.gram``);
-see ``lang_systems/build_parser.py`` for the details and the pegen-0.3.0
+see ``lang_systems/pegen_gram_gen.py`` for the details and the pegen-0.3.0
 workarounds. This hook ensures the base grammar is present, then runs the build.
 """
 
@@ -60,6 +60,6 @@ class PegenBuildHook(BuildHookInterface):
         if root not in sys.path:
             sys.path.insert(0, root)
 
-        from lang_systems.build_parser import build
+        from lang_systems.pegen_gram_gen import build
 
         build()

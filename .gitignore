@@ -6,8 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
-#grammer
-Grammer/
+# grammar
+Grammar/
 python.gram
 python_clean.gram
 quantar_merged.gram

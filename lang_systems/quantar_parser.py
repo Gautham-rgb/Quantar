@@ -3057,12 +3057,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def eq_bitwise_or(self) -> Optional[Any]:
-        # eq_bitwise_or: '==' bitwise_or
+        # eq_bitwise_or: '==' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('=='))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -3070,12 +3070,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def noteq_bitwise_or(self) -> Optional[Any]:
-        # noteq_bitwise_or: ('!=') bitwise_or
+        # noteq_bitwise_or: ('!=') quantum_expr
         mark = self._mark()
         if (
             (tok := self.expect('!='))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [tok, a];
         self._reset(mark)
@@ -3083,12 +3083,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def lte_bitwise_or(self) -> Optional[Any]:
-        # lte_bitwise_or: '<=' bitwise_or
+        # lte_bitwise_or: '<=' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('<='))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -3096,12 +3096,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def lt_bitwise_or(self) -> Optional[Any]:
-        # lt_bitwise_or: '<' bitwise_or
+        # lt_bitwise_or: '<' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('<'))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -3109,12 +3109,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def gte_bitwise_or(self) -> Optional[Any]:
-        # gte_bitwise_or: '>=' bitwise_or
+        # gte_bitwise_or: '>=' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('>='))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -3122,12 +3122,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def gt_bitwise_or(self) -> Optional[Any]:
-        # gt_bitwise_or: '>' bitwise_or
+        # gt_bitwise_or: '>' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('>'))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -3135,14 +3135,14 @@ class GeneratedParser(Parser):
 
     @memoize
     def notin_bitwise_or(self) -> Optional[Any]:
-        # notin_bitwise_or: 'not' 'in' bitwise_or
+        # notin_bitwise_or: 'not' 'in' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('not'))
             and
             (literal_1 := self.expect('in'))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, literal_1, a];
         self._reset(mark)
@@ -3150,12 +3150,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def in_bitwise_or(self) -> Optional[Any]:
-        # in_bitwise_or: 'in' bitwise_or
+        # in_bitwise_or: 'in' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('in'))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -3163,14 +3163,14 @@ class GeneratedParser(Parser):
 
     @memoize
     def isnot_bitwise_or(self) -> Optional[Any]:
-        # isnot_bitwise_or: 'is' 'not' bitwise_or
+        # isnot_bitwise_or: 'is' 'not' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('is'))
             and
             (literal_1 := self.expect('not'))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, literal_1, a];
         self._reset(mark)
@@ -3178,12 +3178,12 @@ class GeneratedParser(Parser):
 
     @memoize
     def is_bitwise_or(self) -> Optional[Any]:
-        # is_bitwise_or: 'is' bitwise_or
+        # is_bitwise_or: 'is' quantum_expr
         mark = self._mark()
         if (
             (literal := self.expect('is'))
             and
-            (a := self.bitwise_or())
+            (a := self.quantum_expr())
         ):
             return [literal, a];
         self._reset(mark)
@@ -7217,17 +7217,6 @@ class GeneratedParser(Parser):
         return None;
 
     @memoize
-    def string_rule(self) -> Optional[Any]:
-        # string_rule: STRING
-        mark = self._mark()
-        if (
-            (s := self.string())
-        ):
-            return s;
-        self._reset(mark)
-        return None;
-
-    @memoize
     def fstring_middle_rule(self) -> Optional[Any]:
         # fstring_middle_rule: fstring_replacement_field | FSTRING_MIDDLE
         mark = self._mark()
@@ -7240,6 +7229,17 @@ class GeneratedParser(Parser):
             (t := self.fstring_middle())
         ):
             return t;
+        self._reset(mark)
+        return None;
+
+    @memoize
+    def string_rule(self) -> Optional[Any]:
+        # string_rule: STRING
+        mark = self._mark()
+        if (
+            (s := self.string())
+        ):
+            return s;
         self._reset(mark)
         return None;
 

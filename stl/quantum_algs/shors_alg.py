@@ -6,7 +6,7 @@ controlled phase shifts, `CR_k`, and a bit-reversing layer of swaps, so each
 gate only touches the qubits it acts on. For N = 91 that is 21 qubits, and
 factoring takes a couple of seconds.
 
-`quantum_subroutine` still cheats the modular exponentiation classically: it
+`quantum_subroutine` cheats the modular exponentiation classically: it
 writes the state |k>|a**k mod N> directly instead of running the gates that
 would produce it. That is the usual simulation shortcut and keeps the register
 at 2**t amplitudes.
@@ -189,7 +189,7 @@ def quantum_subroutine(N: int, a: int) -> str:
     return f"{strongest:0{tot_qubits}b}"[:t]
 
 
-def shors_alg(N: int):
+def shors_alg(N: int, add_default_checks: bool = False):
     if is_prime_fast(N):
         return (1, N)
 
@@ -199,6 +199,16 @@ def shors_alg(N: int):
 
     if N % 2 == 0:
         return 2, N >> 1
+    
+    if add_default_checks:
+        if N % 3 == 0:
+            return 3, N//3
+
+        if N % 5 == 0:
+            return 5, N//5
+
+        if N % 7 == 0:
+            return 7, N//7
 
     while True:
         a = np.random.randint(2, N)
@@ -233,7 +243,7 @@ def shors_alg(N: int):
             return factor2, N // factor2
 
 
-def shors_alg_optim(N: int):
+def shors_alg_optim(N: int, add_default_checks: bool = False):
     """Optimized Shor's algorithm using VQE to optimize the quantum subroutine.
     
     Uses VQE to optimize a parameterized ansatz for the period-finding subroutine,
@@ -248,6 +258,16 @@ def shors_alg_optim(N: int):
     
     if N % 2 == 0:
         return 2, N >> 1
+
+    if add_default_checks:
+        if N % 3 == 0:
+            return 3, N//3
+
+        if N % 5 == 0:
+            return 5, N//5
+
+        if N % 7 == 0:
+            return 7, N//7
     
     # For small N, standard Shor is already fast
     if N < 100:
@@ -263,7 +283,7 @@ def shors_alg_optim(N: int):
     t = m << 1  # Period register size
     
     # Try a few random bases
-    for attempt in range(2):
+    for _ in range(2):
         a = np.random.randint(2, N)
         gcd_val = gcd(N, a)
         if gcd_val > 1:
@@ -344,8 +364,8 @@ def shors_alg_optim(N: int):
 
 if __name__ == "__main__":
     import time
-    t0 = time.time()
     num = int(input("give some number to factorize: "))
+    t0 = time.time()
     print(shors_alg(num))
     t1 = time.time()
     print(f"time taken: {t1 - t0}s")

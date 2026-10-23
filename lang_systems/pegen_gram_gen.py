@@ -8,7 +8,7 @@ pegen 0.3.0 is the last PyPI release and predates several things we need, so a
 few fixes are applied before generating (each one is marked below). Run directly
 with::
 
-    python -m lang_systems.build_parser
+    python -m lang_systems.pegen_gram_gen
 
 or let the build do it (see ``hatch_build.py``).
 """
@@ -43,12 +43,27 @@ COLLIDING_RULES = {
 }
 
 # Splice that gives custom operators their precedence (between `comparison`
-# and `bitwise_or`); see the header of lang_systems/quantar.gram. `comparison`
-# has two alternatives, so both `bitwise_or`s become `quantum_expr`.
+# and `bitwise_or`); see the header of lang_systems/quantar.gram. The comparison
+# left operand and every comparison RHS become `quantum_expr`.
 COMPARISON_OLD = "comparison[expr_ty]:\n    | a=bitwise_or b=compare_op_bitwise_or_pair+"
 COMPARISON_NEW = "comparison[expr_ty]:\n    | a=quantum_expr b=compare_op_bitwise_or_pair+"
 COMPARISON_BASE_OLD = "\n    | bitwise_or\n\ncompare_op_bitwise_or_pair["
 COMPARISON_BASE_NEW = "\n    | quantum_expr\n\ncompare_op_bitwise_or_pair["
+COMPARE_PAIRS_START = "compare_op_bitwise_or_pair[CmpopExprPair*]:"
+COMPARE_PAIRS_END = "# Bitwise operators"
+
+
+def _allow_comparison_rhs_operators(base: str) -> str:
+    """Use `quantum_expr` on both sides of comparisons, not just the left."""
+    start = base.find(COMPARE_PAIRS_START)
+    end = base.find(COMPARE_PAIRS_END, start)
+    if start == -1 or end == -1:
+        raise RuntimeError(
+            "Could not find the comparison operator rules to splice; the "
+            "vendored Grammar/python.gram changed."
+        )
+    block = base[start:end].replace("a=bitwise_or", "a=quantum_expr")
+    return base[:start] + block + base[end:]
 
 
 def _build_grammar_text() -> str:
@@ -61,6 +76,7 @@ def _build_grammar_text() -> str:
             )
     base = base.replace(COMPARISON_OLD, COMPARISON_NEW, 1)
     base = base.replace(COMPARISON_BASE_OLD, COMPARISON_BASE_NEW, 1)
+    base = _allow_comparison_rhs_operators(base)
     overlay = OVERLAY_GRAMMAR.read_text(encoding="utf-8")
     merged = base + "\n" + overlay
 
@@ -100,7 +116,7 @@ def build() -> None:
     # ast.parse()s every action, so the CPython C actions must be removed. The
     # `@trailer` meta (C `_PyPegen_parse`) and the `[return_type]` annotations
     # would also leak into the generated Python, so drop those too.
-    grammar.metas = {"trailer": ""}
+    grammar.metas = {"trailer": ""} #type: ignore
     renames = {r: r + "_rule" for r in COLLIDING_RULES if r in grammar.rules}
 
     def strip(node, seen):

@@ -1,1 +1,0 @@
-# Quantar operators package

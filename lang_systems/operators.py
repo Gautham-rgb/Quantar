@@ -22,6 +22,8 @@ accepted (``"unary"``/``"prefix"`` -> ``unary_pre``, ``"infix"`` -> ``binary``,
 """
 
 from functools import wraps
+from importlib import import_module
+from types import ModuleType
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -46,6 +48,7 @@ OPERATOR_KINDS: tuple[str, ...] = (
     "ternary",
     "callable",
     "matrix",
+    "gate"
 )
 
 #: Friendly synonyms, so the old names and obvious variations still work.
@@ -64,6 +67,16 @@ _KIND_ALIASES: dict[str, str] = {
     "func": "callable",
     "gate": "matrix",
     "gate_matrix": "matrix",
+}
+
+
+#: Operators that the language knows syntactically even before their runtime
+#: implementation is imported.  Keeping these names here means ``parse()`` does
+#: not have to import the quantum simulator just to recognise ``a <-> b``.
+BUILTIN_OPERATOR_KINDS: dict[str, str] = {
+    "<->": "binary",
+    "<-i->": "binary",
+    "<-s->": "binary",
 }
 
 
@@ -166,7 +179,7 @@ class operator:
         self.kind = kind
 
     def __call__(self, func: Callable) -> Callable:
-        return _register(self.name, self.kind, func)
+        return _register(self.name, self.kind, func) #type: ignore
 
     # ─── Convenience constructors ───
 
@@ -191,7 +204,7 @@ class operator:
         return cls(name, "ternary")
 
     @classmethod
-    def callable(cls, name: str) -> "operator":  # noqa: A003 - intentional API name
+    def callable(cls, name: str) -> "operator": 
         return cls(name, "callable")
 
     @classmethod
@@ -224,6 +237,19 @@ def get_operator_kind(name: str) -> str | None:
     return meta.get("kind") if meta else None
 
 
+def get_known_operator_kind(name: str) -> str | None:
+    """Get the kind of a registered or built-in operator."""
+    kind = get_operator_kind(name)
+    if kind is not None:
+        return kind
+    return BUILTIN_OPERATOR_KINDS.get(name)
+
+
+def is_known_operator(name: str) -> bool:
+    """Return whether `name` is a registered or built-in operator."""
+    return name in _global_operators or name in BUILTIN_OPERATOR_KINDS
+
+
 def get_operator_requires_instance(name: str) -> bool:
     """Check if an operator requires an instance (is a method)."""
     meta = _operator_metadata.get(name)
@@ -253,6 +279,39 @@ def list_operators(kind: str | None = None) -> list[str]:
         return list(_global_operators.keys())
     wanted = normalize_kind(kind)
     return [name for name in _global_operators if _operator_metadata.get(name, {}).get("kind") == wanted]
+
+def list_known_operators() -> dict[str, str]:
+    names = set(list_operators()) | set(BUILTIN_OPERATOR_KINDS)
+    return {name: get_known_operator_kind(name) for name in names} #type: ignore
+
+
+def load_operators(*modules: str | ModuleType) -> tuple[ModuleType, ...]:
+    """Import operator modules so their registrations take effect.
+
+    Strings are imported with :func:`importlib.import_module`; module objects
+    are accepted as-is. Call this before :func:`lang_systems.parse` when the
+    source uses operators defined by another package::
+
+        from lang_systems import parse
+        from lang_systems.operators import load_operators
+
+        load_operators("my_package.quantar_ops")
+        tree = parse("a >< b\\n")
+
+    Returns the loaded modules in the order given.
+    """
+    loaded = []
+    for module in modules:
+        if isinstance(module, str):
+            loaded.append(import_module(module))
+        elif isinstance(module, ModuleType):
+            loaded.append(module)
+        else:
+            raise TypeError(
+                "load_operators() expects module names or module objects, "
+                f"got {type(module).__name__}"
+            )
+    return tuple(loaded)
 
 
 def clear_operators():
@@ -288,13 +347,17 @@ __all__ = [
     "OperatorKind",
     "OPERATOR_KINDS",
     "normalize_kind",
+    "BUILTIN_OPERATOR_KINDS",
     "get_operator",
     "get_global_operator",
     "get_global_operator_matrix",
     "get_operator_kind",
+    "get_known_operator_kind",
+    "is_known_operator",
     "get_operator_requires_instance",
     "get_operator_matrix",
     "list_operators",
     "clear_operators",
     "apply_operator",
+    "list_known_operators",
 ]

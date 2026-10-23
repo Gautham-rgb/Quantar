@@ -23,7 +23,7 @@ def optimal_iterations(num_items: int, num_targets: int) -> int:
     max_iterations = int(floor(pi / (4 * theta))) + 2
 
     def success_probability(iteration: int) -> float:
-        return sin((2 * iteration + 1) * theta) ** 2
+        return sin(((iteration + 1) << 1) * theta) ** 2
 
     return int(max(range(max_iterations + 1), key=success_probability))
 
@@ -70,6 +70,7 @@ def grovers_alg(
         num_targets: int = 1,
         scratch_qubits: list | None = None,
     ) -> int:
+
     """Run Grover's algorithm and return the number of iterations used.
 
     The last qubit is the oracle ancilla. `scratch_qubits` are held out of the
@@ -88,7 +89,7 @@ def grovers_alg(
     for qubit in data_qubits:
         qc.apply_gate(gm.h_MAT(), [qubit])
 
-    iterations = optimal_iterations(2 ** len(data_qubits), num_targets)
+    iterations = optimal_iterations(1 << len(data_qubits), num_targets)
     for _ in range(iterations):
         grover_oracle(qc, data_qubits, ancilla_qubit, logic_func)
         grover_diffuser(qc, data_qubits)
@@ -97,16 +98,22 @@ def grovers_alg(
 
 
 def demo(qc: qa.QuantumComputer):
-    """Demo problem: mark the all-ones data register."""
-    def mark_all_ones(qc: qa.QuantumComputer, data_qubits: list, ancilla_qubit: qa.Qubit):
+    """Demo problem: mark the all-zeroes data register."""
+    def mark_all_zeroes(qc: qa.QuantumComputer, data_qubits: list, ancilla_qubit: qa.Qubit):
+        for i in data_qubits:
+            qc.apply_gate(gm.px_MAT(), [i])
+
         qc.apply_gate(gm.px_MAT(), [ancilla_qubit], control_qubits=data_qubits)
 
-    grovers_alg(qc, mark_all_ones)
+        for i in data_qubits:
+            qc.apply_gate(gm.px_MAT(), [i])
+
+    grovers_alg(qc, mark_all_zeroes)
 
 
 if __name__ == "__main__":
     quantum_computer = qa.QuantumComputer(4)
-    counts = quantum_computer.sample(demo, 1000)
+    counts = quantum_computer.sample_parallel(demo, 100000)
 
     results: dict[str, int] = {}
     for bits, count in counts.items():

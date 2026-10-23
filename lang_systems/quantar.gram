@@ -1,6 +1,6 @@
 # Quantar custom-operator extension.
 #
-# `hatch_build.py` (via lang_systems.build_parser) splices this onto the vendored
+# `hatch_build.py` (via lang_systems.pegen_gram_gen) splices this onto the vendored
 # CPython grammar (Grammar/python.gram) and generates lang_systems/quantar_parser.py.
 # Everything below is the *only* quantum-specific grammar; the whole rest of
 # Python is inherited, so quantar is a strict superset of Python.
@@ -11,10 +11,10 @@
 #   symbolic    a  <->  b        matched by QUANTUM_OP   (lang_systems/quantar_tokens.py)
 #   identifier  a  CNOT  b       matched by QUANTUM_NAME (any registered NAME)
 #
-# Precedence: custom operators bind *between* `comparison` and `bitwise_or`.
-# lang_systems.build_parser rewires `comparison: a=quantum_expr ...`; to move the
-# level, change that one splice and the rule living here. The resulting order,
-# loosest to tightest, is:
+# Precedence: custom operators bind *between* `comparison` and `bitwise_or`,
+# on both sides of a comparison. lang_systems.pegen_gram_gen rewires
+# `comparison: a=quantum_expr ...`; to move the level, change that splice and
+# the rule living here. The resulting order, loosest to tightest, is:
 #
 #   or > and > not > comparisons > quantum_operator > | ^ & << >> > + - > * / ...
 

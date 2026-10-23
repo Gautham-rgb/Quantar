@@ -5,64 +5,64 @@ written out as a readable OpenQASM 3 `gate` statement instead of a raw matrix.
 """
 
 import numpy as np
-from quantar.operators import operator
-@operator(kind = "matrix", name = "h")
+from lang_systems.operators import operator
+@operator.matrix("h")
 def h_MAT():
     return np.array([[1, 1],
                   [1, -1]], dtype=complex) / np.sqrt(2)
 
-@operator(kind = "matrix", name = "~[x]")
+@operator.matrix("~[x]")
 def px_MAT():
     return np.array([[0, 1],
                     [1, 0]], dtype=complex)
 
-@operator(kind = "matrix", name = "~[y]")
+@operator.matrix("~[y]")
 def py_MAT():
     return np.array([[0, -1j],
                     [1j, 0]], dtype=complex)
 
-@operator(kind = "matrix", name = "~[z]")
+@operator.matrix("~[z]")
 def pz_MAT():
     return np.array([[1, 0],
                     [0, -1]], dtype=complex)
 
-@operator(kind = "matrix", name = "idm")
+@operator.matrix("idm")
 def i_MAT():
     return np.eye(2, dtype=complex)
 
-@operator(kind = "matrix", name = "s")
+@operator.matrix("s")
 def s_MAT():
     return np.array([[1, 0],
                     [0, 1j]], dtype=complex)
 
-@operator(kind = "matrix", name = "sdg")
+@operator.matrix("sdg")
 def sdg_MAT():
     return np.array([[1, 0],
                         [0, -1j]], dtype=complex)
 
-@operator(kind = "matrix", name = "t")
+@operator.matrix("t")
 def t_MAT():
     return np.array([[1, 0],
                     [0, np.exp(1j * np.pi / 4)]], dtype=complex)
 
-@operator(kind = "matrix", name = "tdg")
+@operator.matrix("tdg")
 def tdg_MAT():
     return np.array([[1, 0],
                         [0, np.exp(-1j * np.pi / 4)]], dtype=complex)
 
-@operator(kind = "matrix", name = "<->")
+@operator.matrix("<->")
 def swap_MAT():
     return np.array([[1, 0, 0, 0],
                         [0, 0, 1, 0],
                         [0, 1, 0, 0],
                         [0, 0, 0, 1]], dtype=complex)
-@operator(kind = "matrix", name = "<-i->")
+@operator.matrix("<-i->")
 def iswap_MAT():
     return np.array([[1, 0,  0,  0],
                         [0, 0, 1j, 0],
                         [0, 1j,  0,  0],
                         [0, 0,  0,  1]], dtype=complex)
-@operator(kind = "matrix", name = "<-s->")
+@operator.matrix("<-s->")
 def swap_sqrt_MAT():
     return np.array([[1, 0, 0, 0],
                             [0, 0.5 + 0.5j, 0.5 - 0.5j, 0],
@@ -148,11 +148,6 @@ _BUILTIN_GATE_NAMES = [
     ("tdg", tdg_MAT),
     ("id", i_MAT),
     ("swap", swap_MAT),
-]
-
-_BUILTIN_ARG_GATE_NAMES = [
-    ("p", p_MAT),
-    
 ]
 
 

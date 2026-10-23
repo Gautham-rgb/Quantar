@@ -1,7 +1,7 @@
 """Parse Quantar source into a parse tree.
 
 Quantar is a superset of Python, so the parser is generated from CPython's
-grammar (see lang_systems/build_parser.py) plus a small operator overlay. This
+grammar (see lang_systems/pegen_gram_gen.py) plus a small operator overlay. This
 module adds the two custom-operator token matchers the overlay refers to and a
 convenient :func:`parse` entry point.
 
@@ -16,7 +16,7 @@ from pegen.tokenizer import Tokenizer
 
 from lang_systems.quantar_parser import GeneratedParser
 from lang_systems.quantar_tokens import tokenize_source
-from quantar.operators import get_global_operator
+from lang_systems.operators import is_known_operator
 
 # The generated parser is deep; parsing the CPython grammar needs headroom.
 _RECURSION_LIMIT = 200_000
@@ -26,26 +26,38 @@ class QuantarParser(GeneratedParser):
     """The generated Python parser plus Quantar's custom-operator matchers."""
 
     def QUANTUM_OP(self):
-        """Match a symbolic operator (e.g. ``<->``) registered in the registry."""
+        """Match a symbolic operator (e.g. ``<->``) known to the language."""
         peeked = self._tokenizer.peek()
-        if peeked.type == token.OP and get_global_operator(peeked.string)[0] is not None:
+        if peeked.type == token.OP and is_known_operator(peeked.string):
             return self._tokenizer.getnext()
         return None
 
     def QUANTUM_NAME(self):
-        """Match an identifier operator (e.g. ``CNOT``) registered in the registry."""
+        """Match an identifier operator (e.g. ``CNOT``) known to the language."""
         peeked = self._tokenizer.peek()
         if (
             peeked.type == token.NAME
             and peeked.string not in self.KEYWORDS
-            and get_global_operator(peeked.string)[0] is not None
+            and is_known_operator(peeked.string)
         ):
             return self._tokenizer.getnext()
         return None
 
 
 def parse(source: str):
-    """Parse `source` and return the raw parse tree (the grammar's `file` rule)."""
+    """Parse `source` and return the raw parse tree (the grammar's `file` rule).
+
+    Raises:
+        SyntaxError: If `source` is not valid Quantar.
+    """
     sys.setrecursionlimit(max(sys.getrecursionlimit(), _RECURSION_LIMIT))
     tokenizer = Tokenizer(tokenize_source(source))
-    return QuantarParser(tokenizer).file()
+    parser = QuantarParser(tokenizer)
+    tree = parser.file()
+    if tree is None:
+        bad = parser._tokenizer.peek()
+        raise SyntaxError(
+            f"invalid Quantar syntax near {bad.string!r}",
+            ("<quantar>", bad.start[0], bad.start[1] + 1, bad.line),
+        )
+    return tree

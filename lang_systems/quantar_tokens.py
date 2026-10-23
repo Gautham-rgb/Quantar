@@ -3,7 +3,7 @@
 Python's tokenizer splits a symbol such as ``<->`` into ``<``, ``-``, ``>``, so
 the generated parser could never match it. This module post-processes the token
 stream and merges maximal runs of adjacent ``OP``/``NAME`` tokens that together
-spell an operator registered in ``quantar.operators`` into a single ``OP`` token.
+spell an operator known to the language into a single ``OP`` token.
 
 Identifier operators (``CNOT``) need no help -- they are ordinary ``NAME`` tokens.
 """
@@ -13,14 +13,15 @@ import token
 import tokenize
 from collections.abc import Iterator
 
-from quantar.operators import list_operators
+from lang_systems.operators import BUILTIN_OPERATOR_KINDS, list_operators
 
 _MERGEABLE = (token.OP, token.NAME)
 
 
 def symbolic_operators() -> list[str]:
-    """Registered operator names that are not plain identifiers, longest first."""
-    symbols = [name for name in list_operators() if not name.isidentifier()]
+    """Known operator names that are not plain identifiers, longest first."""
+    names = set(list_operators()) | set(BUILTIN_OPERATOR_KINDS)
+    symbols = [name for name in names if not name.isidentifier()]
     return sorted(symbols, key=len, reverse=True)
 
 

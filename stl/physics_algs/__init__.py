@@ -1,0 +1,57 @@
+"""Classical physics: vector fields, automatic differentiation, and dynamics."""
+
+from .duals_and_coords import (
+    Dual,
+    SpaceMetric,
+    Trajectory,
+    dual_einsum,
+    dual_kron,
+    dual_norm,
+    kinetic_energy,
+    velocity_verlet,
+)
+from .vector_fields import VectorField, gradient, lorentz_force
+from .units import (
+    DIMENSIONLESS,
+    DimensionError,
+    Q,
+    Quantity,
+    SI,
+    Unit,
+    UnitError,
+    UnitRegistry,
+    UnitSystem,
+    UnknownUnitError,
+    base_units,
+    load_units,
+    unit,
+    units,
+)
+
+__all__ = [
+    "Dual",
+    "SpaceMetric",
+    "Trajectory",
+    "dual_einsum",
+    "dual_kron",
+    "dual_norm",
+    "kinetic_energy",
+    "velocity_verlet",
+    "VectorField",
+    "gradient",
+    "lorentz_force",
+    "DIMENSIONLESS",
+    "DimensionError",
+    "Q",
+    "Quantity",
+    "SI",
+    "Unit",
+    "UnitError",
+    "UnitRegistry",
+    "UnitSystem",
+    "UnknownUnitError",
+    "base_units",
+    "load_units",
+    "unit",
+    "units",
+]
