@@ -1,0 +1,12 @@
+{
+  "scopeName": "source.quantar",
+  "patterns": [
+    {
+      "name": "keyword.operator.quantar",
+      "match": "<-i->|<-s->|<->"
+    },
+    {
+      "include": "source.python"
+    }
+  ]
+}

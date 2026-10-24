@@ -1,0 +1,67 @@
+{
+  "name": "quantar-lang",
+  "displayName": "Quantar Language Support",
+  "description": "Syntax and language-server support for Quantar files",
+  "version": "1.0.0",
+  "publisher": "gauthamrgb",
+  "author": "Gautham_rgb",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gautham-rgb/Quantar"
+  },
+  "galleryBanner": {
+    "color": "#10161F",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:quantar"
+  ],
+  "extensionDependencies": [
+    "ms-python.python"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "main": "./extension.js",
+  "contributes": {
+    "configurationDefaults": {
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "quantarOperator": "#4FC1FF"
+        }
+      }
+    },
+    "languages": [{
+      "id": "quantar",
+      "aliases": ["Quantar", "quantar"],
+      "extensions": [".qtr", ".quantar"]
+    }],
+    "grammars": [{
+      "language": "quantar",
+      "scopeName": "source.quantar",
+      "path": "./syntaxes/quantar.tmLanguage.json"
+    }],
+    "semanticTokenTypes": [
+      {
+        "id": "quantarOperator",
+        "superType": "operator",
+        "description": "Quantar symbolic and word-based operators"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "quantar",
+        "scopes": {
+          "quantarOperator": ["keyword.operator.quantar"]
+        }
+      }
+    ]
+  }
+}

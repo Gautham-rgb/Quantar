@@ -16,30 +16,20 @@ import tokenize
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
+from lang_systems import __version__
 from lang_systems.ast_builder import parse_ast
 from lang_systems.operators import list_known_operators, load_operators
 from lang_systems.quantar_tokens import tokenize_source
 
 TOKEN_TYPES = ("quantarOperator",)
-TOKEN_MODIFIERS = (
-    "nullary",
-    "unary",
-    "binary",
-    "ternary",
-    "callable",
-    "matrix",
-)
-MODIFIER_BITS = {
-    name: 1 << index for index, name in enumerate(TOKEN_MODIFIERS)
-}
 LEGEND = types.SemanticTokensLegend(
     token_types=list(TOKEN_TYPES),
-    token_modifiers=list(TOKEN_MODIFIERS),
+    token_modifiers=[],
 )
 
 logger = logging.getLogger(__name__)
 
-server = LanguageServer("quantar-lsp", "0.1.0")
+server = LanguageServer("quantar-lsp", __version__)
 
 
 def _load_default_operators() -> None:
@@ -126,7 +116,8 @@ def _token_error_range(document, error: tokenize.TokenError) -> types.Range:
 def _publish_diagnostics(ls: LanguageServer, document) -> None:
     diagnostics: list[types.Diagnostic] = []
     try:
-        parse_ast(document.source, document.path or document.uri)
+        filename = document.path or document.uri
+        parse_ast(document.source, filename)
     except SyntaxError as error:
         diagnostics.append(
             types.Diagnostic(
@@ -217,15 +208,13 @@ def semantic_tokens_full(
                 if delta_line == 0
                 else start.character
             )
-            modifier = MODIFIER_BITS.get(operators[current.string], 0)
-
             data.extend(
                 [
                     delta_line,
                     delta_start,
                     end.character - start.character,
                     0,
-                    modifier,
+                    0,
                 ]
             )
             previous_line = start.line

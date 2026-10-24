@@ -207,9 +207,8 @@ cython_debug/
 tempCodeRunnerFile.py
 
 # VS Code extension build output
-editors/vscode/node_modules/
-editors/vscode/out/
-editors/vscode/*.vsix
+extension/node_modules/
+extension/*.vsix
 
 # Ruff stuff:
 .ruff_cache/

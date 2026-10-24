@@ -57,20 +57,22 @@ disable Numba entirely.
 
 ## VS Code extension
 
-The extension lives in `editors/vscode`. It provides `.qtr` syntax highlighting,
-parser diagnostics, and registry-driven operator highlighting through a
-`pygls` language server.
+The extension lives in `extension/`. It provides Python-based syntax
+highlighting for `.qtr` and `.quantar` files, parser diagnostics, and semantic
+highlighting for registered Quantar operators. Operators use one consistent
+cyan accent; the rest of the syntax follows the active VS Code theme.
 
 ```bash
-pip install -e ".[lsp]"
-cd editors/vscode
+python -m pip install -e ".[lsp]"
+cd extension
 npm install
-npm run compile
 ```
 
-Open `editors/vscode` in VS Code and run the `Run Quantar Extension` launch
-configuration. The extension also adds `Quantar: Run File` and
-`Quantar: Compile File to Python` commands.
+Open the project root in VS Code and press F5 to launch the `Run Quantar
+Extension` development configuration. The extension uses the Python
+interpreter selected by the VS Code Python extension. Install the LSP extra in
+that interpreter; for a local checkout, run the install command above from the
+project root.
 
 ## Parsing Quantar
 
@@ -174,9 +176,10 @@ CPython's `Grammar/python.gram` plus the operator overlay in
 
 ## Status
 
-Quantar currently provides the parser, AST, quantum library, physics library,
-a CLI runner/compiler, and a VS Code extension scaffold. A bytecode interpreter
-and debugger are not implemented yet.
+Quantar currently provides the parser, AST, quantum library, physics library, a
+CLI runner/compiler, and a VS Code extension with syntax highlighting,
+operator highlighting, and parser diagnostics. A bytecode interpreter and
+debugger are not implemented yet.
 
 ## Feedback
 
