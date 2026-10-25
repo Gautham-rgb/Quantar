@@ -8,7 +8,7 @@ lazily so that importing this package does not require the generated parser
 
 import importlib
 
-__version__ = "0.1.1"
+__version__ = "1.0.0"
 
 _EXPORTS = {
     "parse": ("lang_systems.quantar", "parse"),
