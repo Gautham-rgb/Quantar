@@ -3,9 +3,9 @@
   "displayName": "Quantar Language Support",
   "description": "Syntax and language-server support for Quantar files",
   "version": "1.0.0",
-  "publisher": "gauthamrgb",
+  "publisher": "Gauthamrgb",
   "author": "Gautham_rgb",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/Gautham-rgb/Quantar"
@@ -20,16 +20,13 @@
   "categories": [
     "Programming Languages"
   ],
-  "activationEvents": [
-    "onLanguage:quantar"
-  ],
   "extensionDependencies": [
     "ms-python.python"
   ],
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },
-  "main": "./extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "configurationDefaults": {
       "editor.semanticTokenColorCustomizations": {
@@ -38,16 +35,27 @@
         }
       }
     },
-    "languages": [{
-      "id": "quantar",
-      "aliases": ["Quantar", "quantar"],
-      "extensions": [".qtr", ".quantar"]
-    }],
-    "grammars": [{
-      "language": "quantar",
-      "scopeName": "source.quantar",
-      "path": "./syntaxes/quantar.tmLanguage.json"
-    }],
+    "languages": [
+      {
+        "id": "quantar",
+        "aliases": [
+          "Quantar",
+          "quantar"
+        ],
+        "extensions": [
+          ".qtr",
+          ".quantar"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "quantar",
+        "scopeName": "source.quantar",
+        "path": "./syntaxes/quantar.tmLanguage.json"
+      }
+    ],
     "semanticTokenTypes": [
       {
         "id": "quantarOperator",
@@ -59,9 +67,14 @@
       {
         "language": "quantar",
         "scopes": {
-          "quantarOperator": ["keyword.operator.quantar"]
+          "quantarOperator": [
+            "keyword.operator.quantar"
+          ]
         }
       }
     ]
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

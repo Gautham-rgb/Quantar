@@ -13,8 +13,21 @@ async function activate(context) {
     const pythonExtension = vscode.extensions.getExtension("ms-python.python");
     let pythonCommand = "python";
     let pythonArgs = [];
-
-    if (pythonExtension) {
+    
+    // Prefer known-good Python with deps if available
+    const preferredPythons = [
+        "C:\\Users\\kaart\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+        "C:\\Python314\\python.exe",
+    ];
+    for (const p of preferredPythons) {
+        if (fs.existsSync(p)) {
+            pythonCommand = p;
+            pythonArgs = [];
+            break;
+        }
+    }
+    
+    if (pythonExtension && pythonCommand === "python") {
         const pythonApi = await pythonExtension.activate();
         const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         const execution = await pythonApi.settings?.getExecutionDetails?.(workspaceUri);
