@@ -19,6 +19,7 @@ import token
 import tokenize
 from dataclasses import dataclass
 from types import CodeType
+from uuid import uuid4
 
 from lang_systems.operators import get_known_operator_kind
 from lang_systems.quantar import parse
@@ -161,7 +162,7 @@ def _render(node, source: _Source, rewrites: list[_Rewrite]) -> str:
         if first is None or last is None:
             return _node_text(node, source)
 
-        name = f"{_SENTINEL_PREFIX}{len(rewrites)}{_SENTINEL_SUFFIX}"
+        name = f"{_SENTINEL_PREFIX}{uuid4().hex}{_SENTINEL_SUFFIX}"
         kind = get_known_operator_kind(operator.string) or "binary"
         rewrites.append(_Rewrite(name, operator.string, kind, first.start, last.end))
 

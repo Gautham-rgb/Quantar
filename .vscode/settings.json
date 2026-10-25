@@ -1,6 +1,7 @@
 {
     "python.REPL.enableREPLSmartSend": false,
-    "python.analysis.extraPaths": ["src"],
+    "python.analysis.extraPaths": ["src", "C:/Users/kaart/AppData/Local/Programs/Python/Python314/Lib/site-packages"],
+    "python.analysis.autoSearchPaths": true,
     "python-envs.pythonProjects": [
         {
             "path": ".",

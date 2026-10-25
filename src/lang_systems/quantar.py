@@ -22,17 +22,17 @@ from lang_systems.operators import is_known_operator
 _RECURSION_LIMIT = 200_000
 
 
-class QuantarParser(GeneratedParser):
+class QuantarParser(GeneratedParser):  # type: ignore[misc]
     """The generated Python parser plus Quantar's custom-operator matchers."""
 
-    def QUANTUM_OP(self):
+    def QUANTUM_OP(self):  # type: ignore[override]
         """Match a symbolic operator (e.g. ``<->``) known to the language."""
         peeked = self._tokenizer.peek()
         if peeked.type == token.OP and is_known_operator(peeked.string):
             return self._tokenizer.getnext()
         return None
 
-    def QUANTUM_NAME(self):
+    def QUANTUM_NAME(self):  # type: ignore[override]
         """Match an identifier operator (e.g. ``CNOT``) known to the language."""
         peeked = self._tokenizer.peek()
         if (
@@ -56,8 +56,27 @@ def parse(source: str):
     tree = parser.file()
     if tree is None:
         bad = parser._tokenizer.peek()
+        # Try to find a better error location by scanning tokens
+        try:
+            tokens = list(tokenize_source(source))
+            # Find the last token that's not NEWLINE/INDENT/DEDENT/ENDMARKER
+            import token as token_module
+            for t in reversed(tokens):
+                if t.type not in (token_module.NEWLINE, token_module.INDENT, token_module.DEDENT, token_module.NL, token_module.ENDMARKER, token_module.COMMENT):
+                    bad = t
+                    break
+        except Exception:
+            pass
+        line_text = bad.line if bad.line is not None else ""
+        if not line_text and bad.start:
+            try:
+                lines = source.splitlines()
+                if 0 < bad.start[0] <= len(lines):
+                    line_text = lines[bad.start[0] - 1]
+            except Exception:
+                pass
         raise SyntaxError(
             f"invalid Quantar syntax near {bad.string!r}",
-            ("<quantar>", bad.start[0], bad.start[1] + 1, bad.line),
+            ("<quantar>", bad.start[0], bad.start[1] + 1, line_text),
         )
     return tree

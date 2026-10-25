@@ -32,6 +32,10 @@ pip install quantar[optimization]
 pip install quantar[lsp]
 ```
 
+also install the VS code extension [here](https://marketplace.visualstudio.com/items?itemName=Gauthamrgb.quantar-lang) for better coloring and errors or just use the `ext` command as follows:
+```bash
+ext install Gauthamrgb.quantar-lang
+```
 ## Running Quantar
 
 ```bash
