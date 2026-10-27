@@ -8,6 +8,15 @@ VS Code support for Quantar's `.qtr` and `.quantar` files.
   a consistent cyan accent.
 - Parser diagnostics from Quantar's language server.
 - Semantic highlighting for operators registered by the project or user code.
+- Python-language hover, completions, definitions, references, type definitions,
+  implementations, and signature help through Pylance.
+
+For Pylance, the extension creates a temporary Python mirror under the
+workspace in `.quantar-pylance-mirrors/` and replaces Quantar-only operators
+with position-preserving Python placeholders. Results map back to the original
+`.qtr` document. Pylance can
+therefore analyze surrounding Python code, while inferred types for expressions
+using custom operators are only approximate.
 
 ## Setup
 

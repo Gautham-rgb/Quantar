@@ -8,6 +8,6 @@ dist/*.map
 package-lock.json
 extension.js
 jsconfig.json
-README.md
-LICENSE
-
+*.vsix
+.quantar-pylance-mirrors/**
+.DS_Store

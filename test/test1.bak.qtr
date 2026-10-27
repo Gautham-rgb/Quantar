@@ -1,15 +1,5 @@
-import quantum
-from quantum import QuantumComputer
+x = 10
+y = 20
 
-q = QuantumComputer(4)
-
-# ordinary Python still works
-for qubit in q.qubits:
-    qubit.apply_gate(quantum.h_MAT())
-
-# gate operators
-q[0] <-> 
-q[1] <-s-> q[2]
-q[2] <-i-> q[3]
-
-print(q.state_vector)
+print(x, y)
+z = v #undefined stuff

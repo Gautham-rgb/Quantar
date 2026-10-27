@@ -1,4 +1,4 @@
-"""Build a Python AST for Quantar source.
+﻿"""Build a Python AST for Quantar source.
 
 Quantar adds a handful of infix operators to Python's syntax.  Reimplementing
 CPython's grammar would be wasteful, so this module takes the opposite route:
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from types import CodeType
 from uuid import uuid4
 
-from lang_systems.operators import get_known_operator_kind
+from lang_systems.operators import BUILTIN_OPERATOR_KINDS, get_known_operator_kind
 from lang_systems.quantar import parse
 from lang_systems.quantar_tokens import tokenize_source
 
@@ -163,7 +163,9 @@ def _render(node, source: _Source, rewrites: list[_Rewrite]) -> str:
             return _node_text(node, source)
 
         name = f"{_SENTINEL_PREFIX}{uuid4().hex}{_SENTINEL_SUFFIX}"
-        kind = get_known_operator_kind(operator.string) or "binary"
+        # The kind describes the syntax (``a <-> b`` is binary), not the
+        # runtime implementation, which may be a matrix or a callable.
+        kind = BUILTIN_OPERATOR_KINDS.get(operator.string, "binary")
         rewrites.append(_Rewrite(name, operator.string, kind, first.start, last.end))
 
         left_text = _render(left, source, rewrites)
@@ -194,6 +196,65 @@ def _render(node, source: _Source, rewrites: list[_Rewrite]) -> str:
     for start, end, replacement in sorted(replacements, reverse=True):
         text = text[:start] + replacement + text[end:]
     return text
+
+
+def python_compatible_source(source: str) -> str:
+    """Replace Quantar infix operators with Python operators, preserving positions.
+
+    This is a lightweight mirror for external Python language servers. Each
+    Quantar operator is replaced with ``or`` and padding spaces of equal UTF-16
+    width, so lines and editor columns remain aligned with the original file.
+    ``or`` accepts every operand type, which keeps type checkers from reporting
+    bogus "unsupported operand" errors for Quantar's gate operators.
+    """
+    try:
+        parsed = parse(source)
+    except (SyntaxError, tokenize.TokenError):
+        try:
+            ast.parse(source)
+        except SyntaxError:
+            return source
+        return source
+
+    operators: list[tokenize.TokenInfo] = []
+
+    def collect(node) -> None:
+        operator = _custom_operator(node)
+        if operator is not None:
+            operators.append(operator)
+            collect(node[0])
+            collect(node[2])
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(parsed)
+    if not operators:
+        return source
+
+    source_map = _Source(source)
+    rewritten = source
+    replacements = []
+    for operator in operators:
+        start = source_map.offset(operator.start)
+        end = source_map.offset(operator.end)
+        utf16_width = len(operator.string.encode("utf-16-le")) // 2
+        if utf16_width >= 2:
+            replacement = "or" + (" " * (utf16_width - 2))
+        else:
+            replacement = "+"
+        replacements.append((start, end, replacement))
+
+    for start, end, replacement in sorted(replacements, reverse=True):
+        rewritten = rewritten[:start] + replacement + rewritten[end:]
+
+    try:
+        ast.parse(rewritten)
+    except SyntaxError:
+        # Keep broken/incomplete user input intact so the Python server can
+        # still provide whatever recovery it supports.
+        return source
+    return rewritten
 
 
 class _ReplaceSentinels(ast.NodeTransformer):
@@ -235,9 +296,19 @@ def parse_ast(source: str, filename: str = "<quantar>") -> ast.Module:
     """Parse Quantar source into a Python AST containing :class:`QuantumOp` nodes."""
     source_map = _Source(source)
     rewrites: list[_Rewrite] = []
-    rewritten = _render(parse(source), source_map, rewrites)
-    tree = ast.parse(rewritten, filename=filename)
+    try:
+        parsed = parse(source)
+        rewritten = _render(parsed, source_map, rewrites)
+        tree = ast.parse(rewritten, filename=filename)
+    except SyntaxError as quantar_error:
+        # Keep Quantar's parser for custom operators, but let CPython accept
+        # ordinary Python syntax supported by the running Python version.
+        try:
+            return ast.parse(source, filename=filename)
+        except SyntaxError:
+            raise quantar_error
     tree = _ReplaceSentinels(rewrites, source_map).visit(tree)
+    tree._quantar_rewrites = rewrites
     ast.fix_missing_locations(tree)
     return tree
 
@@ -266,6 +337,7 @@ __all__ = [
     "QuantumOp",
     "LowerQuantumOps",
     "parse_ast",
+    "python_compatible_source",
     "build_ast",
     "lower_ast",
     "compile_ast",

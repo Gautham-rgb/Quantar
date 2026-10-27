@@ -55,26 +55,15 @@ def parse(source: str):
     parser = QuantarParser(tokenizer)
     tree = parser.file()
     if tree is None:
-        bad = parser._tokenizer.peek()
-        # Try to find a better error location by scanning tokens
-        try:
-            tokens = list(tokenize_source(source))
-            # Find the last token that's not NEWLINE/INDENT/DEDENT/ENDMARKER
-            import token as token_module
-            for t in reversed(tokens):
-                if t.type not in (token_module.NEWLINE, token_module.INDENT, token_module.DEDENT, token_module.NL, token_module.ENDMARKER, token_module.COMMENT):
-                    bad = t
-                    break
-        except Exception:
-            pass
-        line_text = bad.line if bad.line is not None else ""
+        # Parsing is backtracking, so peek() may point back at the beginning.
+        # The tokenizer retains every token explored; diagnose() returns the
+        # furthest token reached by the grammar before it failed.
+        bad = parser._tokenizer.diagnose()
+        line_text = bad.line or ""
         if not line_text and bad.start:
-            try:
-                lines = source.splitlines()
-                if 0 < bad.start[0] <= len(lines):
-                    line_text = lines[bad.start[0] - 1]
-            except Exception:
-                pass
+            lines = source.splitlines()
+            if 0 < bad.start[0] <= len(lines):
+                line_text = lines[bad.start[0] - 1]
         raise SyntaxError(
             f"invalid Quantar syntax near {bad.string!r}",
             ("<quantar>", bad.start[0], bad.start[1] + 1, line_text),

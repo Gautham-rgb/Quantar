@@ -223,3 +223,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Temporary Python documents used by Quantar/Pylance integration
+**/.quantar-pylance-mirrors/

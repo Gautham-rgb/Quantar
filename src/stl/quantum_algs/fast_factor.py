@@ -4,7 +4,6 @@ Fast factorization module - combines multiple classical algorithms for speed.
 
 import math
 import random
-from math import gcd
 from typing import Optional, Tuple, List
 
 # Pre-computed small primes for trial division
@@ -73,7 +72,6 @@ def pollards_rho(n: int, max_iter: int = 100000) -> Optional[Tuple[int, int]]:
     
     while True:
         c = random.randrange(1, n)
-        f = lambda x: (x * x + c) % n
         
         x, y, d = 2, 2, 1
         while d == 1:

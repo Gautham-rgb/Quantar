@@ -3,7 +3,7 @@
   "patterns": [
     {
       "name": "keyword.operator.quantar",
-      "match": "<-i->|<-s->|<->"
+      "match": "<-i->|<-s->|<->|~\\[[A-Za-z_][A-Za-z0-9_]*\\]"
     },
     {
       "include": "source.python"

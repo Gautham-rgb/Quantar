@@ -269,10 +269,10 @@ class SpaceMetric:
         if self.system == "cartesian":
             return [1.0 for _ in coords]
         elif self.system == "spherical":
-            r, theta, phi = coords[0], coords[1], coords[2]
+            r, theta = coords[0], coords[1]
             return [1.0, r, r * np.sin(theta)]
         elif self.system == "cylindrical":
-            rho, phi, z = coords[0], coords[1], coords[2]
+            rho = coords[0]
             return [1.0, rho, 1.0]
         raise ValueError("Unknown metric system.")
 

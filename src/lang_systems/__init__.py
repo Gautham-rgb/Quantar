@@ -8,7 +8,7 @@ lazily so that importing this package does not require the generated parser
 
 import importlib
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 _EXPORTS = {
     "parse": ("lang_systems.quantar", "parse"),
@@ -35,4 +35,4 @@ def __getattr__(name):
     return value
 
 
-__all__ = list(_EXPORTS)
+__all__ = list(_EXPORTS) #type: ignore

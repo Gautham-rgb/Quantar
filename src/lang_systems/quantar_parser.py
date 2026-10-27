@@ -7217,17 +7217,6 @@ class GeneratedParser(Parser):
         return None;
 
     @memoize
-    def string_rule(self) -> Optional[Any]:
-        # string_rule: STRING
-        mark = self._mark()
-        if (
-            (s := self.string())
-        ):
-            return s;
-        self._reset(mark)
-        return None;
-
-    @memoize
     def fstring_middle_rule(self) -> Optional[Any]:
         # fstring_middle_rule: fstring_replacement_field | FSTRING_MIDDLE
         mark = self._mark()
@@ -7240,6 +7229,17 @@ class GeneratedParser(Parser):
             (t := self.fstring_middle())
         ):
             return t;
+        self._reset(mark)
+        return None;
+
+    @memoize
+    def string_rule(self) -> Optional[Any]:
+        # string_rule: STRING
+        mark = self._mark()
+        if (
+            (s := self.string())
+        ):
+            return s;
         self._reset(mark)
         return None;
 

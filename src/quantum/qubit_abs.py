@@ -680,3 +680,31 @@ class QuantumComputer:
     def to_openqasm3(self) -> str:
         """Render the recorded history as an OpenQASM 3 program."""
         return to_openqasm3(self.num_qubits, self.name, self.op_hist)
+
+from lang_systems import operators
+
+@operators.operator.callable("directed_teleport")
+def directed_teleport(q1: Qubit, q2: Qubit, q3: Qubit) -> None:
+    """Apply the directed teleportation gate to three distinct qubits."""
+    qc = q1.computer
+    qubits = (q1, q2, q3)
+    if any(qubit.computer is not qc for qubit in qubits):
+        raise ValueError("all directed-teleportation qubits must belong to the same computer")
+    if len({qubit.index for qubit in qubits}) != 3:
+        raise ValueError("directed teleportation requires three distinct qubits")
+
+    gate_matrix = np.array(
+        [
+            [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0],
+            [1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0],
+            [0.0, -1.0, 0.0, -1.0, 1.0, 0.0, -1.0, 0.0],
+            [1.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, -1.0],
+            [0.0, -1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0],
+        ],
+        dtype=complex,
+    ) / 2.0
+
+    qc.apply_gate(gate_matrix, target_qubits=list(qubits))

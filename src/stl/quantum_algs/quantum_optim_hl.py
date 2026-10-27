@@ -8,13 +8,7 @@ from typing import Callable, Optional, List, Literal
 from dataclasses import dataclass
 
 from quantum.qubit_abs import QuantumComputer
-from quantum.gate_matrix import rx_MAT, ry_MAT, rz_MAT, p_MAT, px_MAT
-from stl.quantum_algs.quantum_optim import (
-    hardware_efficient_ansatz, 
-    measure_pauli_expectation, 
-    Hamiltonian, 
-    Ansatz
-)
+from stl.quantum_algs.quantum_optim import Hamiltonian
 
 
 @dataclass
@@ -130,9 +124,9 @@ class QuantumOptimizer:
                 shift = np.pi / 2
                 for j in range(len(params)):
                     params_plus = params.copy()
-                    params_plus[j] += np.pi / 2
+                    params_plus[j] += shift
                     params_minus = params.copy()
-                    params_minus[j] -= np.pi / 2
+                    params_minus[j] -= shift
                     
                     # Parameter shift rule: gradient = 0.5 * (E(θ+π/2) - E(θ-π/2))
                     e_plus = energy(params_plus)

@@ -2,7 +2,7 @@
   "name": "quantar-lang",
   "displayName": "Quantar Language Support",
   "description": "Syntax and language-server support for Quantar files",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "Gauthamrgb",
   "author": "Gautham_rgb",
   "license": "MIT",
@@ -21,18 +21,41 @@
     "Programming Languages"
   ],
   "extensionDependencies": [
-    "ms-python.python"
+    "ms-python.python",
+    "ms-python.vscode-pylance"
   ],
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },
   "main": "./dist/extension.js",
+  "scripts": {
+    "bundle": "esbuild ./extension.js --bundle --platform=node --external:vscode --format=cjs --outfile=dist/extension.js",
+    "vscode:prepublish": "npm run bundle",
+    "package": "npm run bundle && npx @vscode/vsce package --no-dependencies",
+    "publish": "npm run bundle && npx @vscode/vsce publish --no-dependencies"
+  },
   "contributes": {
+    "configuration": {
+      "title": "Quantar",
+      "properties": {
+        "quantar.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Python interpreter that has Quantar and its LSP dependencies installed. Leave empty to use the project's .venv or the interpreter selected by the Python extension."
+        }
+      }
+    },
     "configurationDefaults": {
       "editor.semanticTokenColorCustomizations": {
         "rules": {
           "quantarOperator": "#4FC1FF"
         }
+      },
+      "files.exclude": {
+        "**/.quantar-pylance-mirrors/**": true
+      },
+      "search.exclude": {
+        "**/.quantar-pylance-mirrors/**": true
       }
     },
     "languages": [

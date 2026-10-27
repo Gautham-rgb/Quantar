@@ -2,6 +2,11 @@
   "comments": {
     "lineComment": "#"
   },
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`~!@#%^&*()\\-=+\\[{\\]}\\\\|;:'\",.<>/?\\s]+)",
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(class|def|async\\s+def|if|elif|else|for|while|try|except|finally|with|match|case)\\b.*:\\s*(#.*)?$",
+    "decreaseIndentPattern": "^\\s*(elif|else|except|finally|case)\\b.*:\\s*(#.*)?$"
+  },
   "brackets": [
     ["{", "}"],
     ["[", "]"],
